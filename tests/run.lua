@@ -249,7 +249,7 @@ local function run()
 	local function command(title)
 		return { title = title, command = "test.command", arguments = { title } }
 	end
-	setup({ color = "#E3A875" })
+	setup()
 	one.actions = {
 		{ title = "Import Foo", edit = edit, kind = "quickfix" },
 		command("Import Bar"),

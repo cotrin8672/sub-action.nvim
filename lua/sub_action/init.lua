@@ -1,6 +1,7 @@
 local M = {}
 local defaults = {
 	mapping = "gra",
+	color = "#E3A875",
 	shortcut = { mode = "prefix" },
 	ui = { action = { max_width = 50, max_height = 8 }, preview = { max_width = 70, max_height = 15 } },
 	ranking = { frequency = true },

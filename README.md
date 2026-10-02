@@ -48,7 +48,7 @@ Defaults, also usable without a plugin manager:
 ```lua
 require("sub_action").setup({
   mapping = "gra", -- false for your own mapping
-  color = nil, -- submode accent, e.g. "#E3A875"
+  color = "#E3A875", -- submode accent
   shortcut = { mode = "prefix" }, -- "prefix", "mnemonic", "off"
   ui = {
     action = { max_width = 50, max_height = 8 },
