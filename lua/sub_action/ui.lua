@@ -140,7 +140,6 @@ local function show(s, kind, lines, options, geometry)
 	local border = options.border == "padded" and { " ", "", "", " ", "", "", " ", " " } or options.border
 	local win_config = vim.tbl_extend("force", {
 		relative = "editor",
-		style = "minimal",
 		focusable = false,
 		border = border,
 		zindex = 1001,
@@ -152,6 +151,7 @@ local function show(s, kind, lines, options, geometry)
 		elseif float.id and api.nvim_win_is_valid(float.id) then
 			api.nvim_win_set_config(float.id, win_config)
 		else
+			win_config.style = "minimal"
 			float.id = api.nvim_open_win(float.buf, false, win_config)
 		end
 		float.geometry = geometry
