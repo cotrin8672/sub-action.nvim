@@ -3,7 +3,7 @@
 Blink-style LSP code actions in a Normal-mode submode. Your source buffer keeps
 focus; actions and a diff appear beside the cursor.
 
-![sub-action with Blink v2](assets/demo.png)
+![sub-action.nvim](assets/demo.png)
 
 ## Installation
 
@@ -23,9 +23,9 @@ Requires Neovim **0.11+** and an LSP with code actions. With
 }
 ```
 
-Blink is optional. When Blink v2 is loaded, its windows, selection, scrollbar,
-highlights, padding, borders, and transparency are reused. Otherwise, native
-floats use the same highlight groups. No `nvim-submode.setup()` call is needed.
+Native floats match Blink v2's spacing, selection, scrollbars, and theme
+highlights. Blink is neither required nor loaded. No `nvim-submode.setup()`
+call is needed.
 
 ## Usage
 
@@ -60,7 +60,7 @@ require("sub_action").setup({
 ```
 
 `.open()` and `.close()` are available. Window options also accept `border`,
-`winblend`, and `winhighlight`. The accent is exposed through
+`winblend`, `winhighlight`, and `scrollbar`. The accent is exposed through
 `require("nvim-submode").get_submode_color()` for statuslines and cursor colors.
 
 ## Performance
@@ -77,7 +77,6 @@ Concurrent processes use last-writer-wins.
 ## Development
 
 Set `SUB_ACTION_SUBMODE` to a dependency checkout, or clone it to `.deps/nvim-submode`.
-For Blink, also set `SUB_ACTION_BLINK` and `SUB_ACTION_BLINK_LIB`.
 
 ```sh
 nvim --headless -u NONE -l tests/run.lua

@@ -24,11 +24,6 @@ for name in pairs(package.loaded) do
 end
 local results = { setup_us = setup_us, require_us = require_us, setup_modules = dependencies }
 if vim.env.SUB_ACTION_BENCH_PHASE ~= "setup" then
-	if vim.env.SUB_ACTION_BLINK then
-		vim.opt.runtimepath:prepend(vim.env.SUB_ACTION_BLINK)
-		vim.opt.runtimepath:prepend(vim.env.SUB_ACTION_BLINK_LIB or root .. "/.deps/blink.lib")
-		require("blink.cmp.config").set({})
-	end
 	local function measure(name, count, fn, warmup)
 		for _ = 1, warmup or 20 do
 			fn()

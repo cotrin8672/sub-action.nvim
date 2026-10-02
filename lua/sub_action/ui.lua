@@ -15,6 +15,8 @@ local links = {
 	BlinkCmpKind = "PmenuKind",
 	BlinkCmpDoc = "NormalFloat",
 	BlinkCmpDocBorder = "NormalFloat",
+	BlinkCmpScrollBarThumb = "PmenuThumb",
+	BlinkCmpScrollBarGutter = "PmenuSbar",
 }
 local function highlights()
 	for group, link in pairs(links) do
@@ -25,10 +27,7 @@ highlights()
 api.nvim_create_autocmd("ColorScheme", { callback = highlights })
 
 local function style(kind, options)
-	local blink = package.loaded["blink.cmp.config"]
-	local inherited = blink and (kind == "action" and blink.completion.menu or blink.completion.documentation.window)
-		or {}
-	local border = options.border or inherited.border
+	local border = options.border
 	if not border then
 		local global = vim.opt.winborder:get()
 		border = #global == 1 and global[1] or global
@@ -36,25 +35,22 @@ local function style(kind, options)
 			border = kind == "preview" and "padded" or "none"
 		end
 	end
-	local draw = blink and blink.completion.menu.draw or {}
 	return {
 		border = border,
-		winblend = options.winblend or inherited.winblend or 0,
+		winblend = options.winblend or 0,
 		winhighlight = options.winhighlight
-			or inherited.winhighlight
 			or (
 				kind == "action"
-					and "Normal:BlinkCmpMenu,FloatBorder:BlinkCmpMenuBorder,CursorLine:BlinkCmpMenuSelection,Search:None"
+					and "Normal:BlinkCmpMenu,FloatBorder:BlinkCmpMenuBorder,CursorLine:BlinkCmpMenuSelection,Search:None,CurSearch:None"
 				or "Normal:BlinkCmpDoc,FloatBorder:BlinkCmpDocBorder,EndOfBuffer:BlinkCmpDoc"
 			),
-		min_width = kind == "action" and (inherited.min_width or 15) or 1,
+		min_width = kind == "action" and 15 or 1,
 		max_height = options.max_height,
 		max_width = options.max_width,
-		scrolloff = kind == "action" and (inherited.scrolloff or 2) or 0,
-		scrollbar = inherited.scrollbar ~= false,
-		cursorline_priority = draw.cursorline_priority or 10000,
-		padding = draw.padding or 1,
-		gap = draw.gap or 1,
+		scrolloff = kind == "action" and 2 or 0,
+		scrollbar = options.scrollbar ~= false,
+		padding = 1,
+		gap = 1,
 		wrap = kind == "preview",
 		linebreak = kind == "preview",
 		filetype = kind == "action" and "sub-action" or "diff",
@@ -118,17 +114,13 @@ local function show(s, kind, lines, options, geometry)
 	local float = s[kind]
 	local created = not float
 	if not float then
-		local blink = package.loaded["blink.cmp.config"] and require("blink.cmp.lib.window")
-		if blink then
-			float = blink.new("sub_action_" .. kind, options)
-			float.buf = float:get_buf()
-		else
-			float = { buf = api.nvim_create_buf(false, true), config = options }
-		end
+		float = { buf = api.nvim_create_buf(false, true) }
 		s[kind] = float
 		vim.bo[float.buf].bufhidden = "wipe"
 		vim.bo[float.buf].filetype = options.filetype
+		vim.bo[float.buf].tabstop = 1
 	end
+	float.config = options
 	local changed = float.lines ~= lines
 	if changed then
 		vim.bo[float.buf].modifiable = true
@@ -144,11 +136,8 @@ local function show(s, kind, lines, options, geometry)
 		border = border,
 		zindex = 1001,
 	}, geometry)
-	if created or changed or not vim.deep_equal(float.geometry, geometry) then
-		if float.open then
-			float:open()
-			float:set_win_config(win_config)
-		elseif float.id and api.nvim_win_is_valid(float.id) then
+	if created or not vim.deep_equal(float.geometry, geometry) then
+		if float.id and api.nvim_win_is_valid(float.id) then
 			api.nvim_win_set_config(float.id, win_config)
 		else
 			win_config.style = "minimal"
@@ -163,8 +152,77 @@ local function show(s, kind, lines, options, geometry)
 		vim.wo[float.id].linebreak = options.linebreak
 		vim.wo[float.id].scrolloff = options.scrolloff
 		vim.wo[float.id].cursorlineopt = "line"
+		vim.wo[float.id].foldenable = false
 	end
 	return float, changed
+end
+
+local function scrollbar(float)
+	local geometry, options = float.geometry, float.config
+	local height, total = geometry.height, float.content_height
+	if not options.scrollbar or total <= height then
+		if float.scrollbar then
+			M.close_float(float.scrollbar)
+			float.scrollbar = nil
+		end
+		return
+	end
+	local border = options.border
+	local gutter = border == "none" or border == "padded"
+	if type(border) == "table" then
+		local right = border[3 % #border + 1]
+		right = type(right) == "table" and right[1] or right
+		gutter = right == "" or right == " "
+	end
+	local thumb = math.max(1, math.floor(height * height / total + 0.5) - 1)
+	local top = math.max(0, vim.fn.line("w0", float.id) - 1)
+	if options.wrap and top > 0 then
+		top = api.nvim_win_text_height(float.id, { start_row = 0, end_row = top - 1 }).all
+	end
+	local offset = math.min(height - thumb, math.floor(top / (total - height) * (height - thumb) + 0.5))
+	local position = {
+		relative = "win",
+		win = float.id,
+		row = gutter and 0 or offset,
+		col = geometry.width + (border == "padded" and 1 or 0),
+		width = 1,
+		height = gutter and height or thumb,
+		focusable = false,
+		border = "none",
+		zindex = 1002,
+	}
+	local bar = float.scrollbar
+	if not bar then
+		bar = { buf = api.nvim_create_buf(false, true) }
+		float.scrollbar = bar
+		vim.bo[bar.buf].bufhidden = "wipe"
+		position.style, position.noautocmd = "minimal", true
+		bar.id = api.nvim_open_win(bar.buf, false, position)
+		position.style, position.noautocmd = nil, nil
+	end
+	if bar.height ~= height then
+		api.nvim_buf_set_lines(bar.buf, 0, -1, false, vim.fn["repeat"]({ " " }, height))
+		bar.height = height
+		bar.offset = nil
+	end
+	if not vim.deep_equal(bar.geometry, position) then
+		api.nvim_win_set_config(bar.id, position)
+		bar.geometry = position
+	end
+	if bar.gutter ~= gutter then
+		local group = gutter and "BlinkCmpScrollBarGutter" or "BlinkCmpScrollBarThumb"
+		vim.wo[bar.id].winhighlight = "Normal:" .. group .. ",EndOfBuffer:" .. group
+	end
+	if bar.offset ~= offset or bar.thumb ~= thumb or bar.gutter ~= gutter then
+		api.nvim_buf_clear_namespace(bar.buf, ns, 0, -1)
+		if gutter then
+			api.nvim_buf_set_extmark(bar.buf, ns, offset, 0, {
+				end_row = offset + thumb,
+				line_hl_group = "BlinkCmpScrollBarThumb",
+			})
+		end
+		bar.offset, bar.thumb, bar.gutter = offset, thumb, gutter
+	end
 end
 
 local function mark(buffer, row, start, finish, group, priority)
@@ -228,12 +286,10 @@ function M.menu(s, config)
 	local geometry = { row = row, col = col, width = menu_width, height = height }
 	s.geometry = { row = row, col = col, width = menu_width + horizontal, height = height + vertical }
 	local float = show(s, "action", lines, options, geometry)
+	float.content_height = #lines
 	float.selection = nil
 	api.nvim_buf_clear_namespace(float.buf, input_ns, 0, -1)
 	vim.wo[float.id].cursorline = true
-	if float.cursor_line then
-		float.cursor_line:update(float.id)
-	end
 	for i, entry in ipairs(s.actions) do
 		local range = ranges[i]
 		mark(float.buf, i - 1, padding[1], padding[1] + #s.labels[i], "BlinkCmpKind")
@@ -246,31 +302,27 @@ function M.menu(s, config)
 		)
 		mark(float.buf, i - 1, range[3], range[4], "BlinkCmpSource")
 	end
-	if not float.open then
-		local group = options.winhighlight:match("CursorLine:([^,]+)") or "BlinkCmpMenuSelection"
-		local background = api.nvim_get_hl(0, { name = group, link = false }).bg
-		if background then
-			api.nvim_set_hl(0, "SubActionSelection", { bg = background })
-			float.selection_group = "SubActionSelection"
-		end
+	local group = options.winhighlight:match("CursorLine:([^,]+)") or "BlinkCmpMenuSelection"
+	local background = api.nvim_get_hl(0, { name = group, link = false }).bg
+	float.selection_group = nil
+	if background then
+		api.nvim_set_hl(0, "SubActionSelection", { bg = background })
+		float.selection_group = "SubActionSelection"
 	end
 	M.select(s)
 end
 
 function M.select(s)
 	local float = s.action
-	if float.set_cursor then
-		float:set_cursor({ s.selected, 0 })
-	else
-		api.nvim_win_set_cursor(float.id, { s.selected, 0 })
-		if float.selection_group then
-			float.selection = api.nvim_buf_set_extmark(float.buf, ns, s.selected - 1, 0, {
-				id = float.selection,
-				line_hl_group = float.selection_group,
-				priority = s.menu_options.cursorline_priority,
-			})
-		end
+	api.nvim_win_set_cursor(float.id, { s.selected, 0 })
+	if float.selection_group then
+		float.selection = api.nvim_buf_set_extmark(float.buf, ns, s.selected - 1, 0, {
+			id = float.selection,
+			line_hl_group = float.selection_group,
+			priority = 10000,
+		})
 	end
+	scrollbar(float)
 	if s.marked_input == s.input then
 		return
 	end
@@ -313,21 +365,14 @@ function M.preview(s, lines, config)
 	local float, changed =
 		show(s, "preview", lines, options, { row = row, col = col, width = preview_width, height = height })
 	float.anchor = anchor
-	height = math.max(
-		1,
-		math.min(
-			api.nvim_win_text_height(float.id, {}).all,
-			options.max_height,
-			vim.o.lines - vim.o.cmdheight - 1 - vertical
-		)
-	)
+	float.content_height = api.nvim_win_text_height(float.id, {}).all
+	height =
+		math.max(1, math.min(float.content_height, options.max_height, vim.o.lines - vim.o.cmdheight - 1 - vertical))
 	row = math.max(0, math.min(anchor.row, vim.o.lines - vim.o.cmdheight - 1 - height - vertical))
 	local geometry = { relative = "editor", row = row, col = col, width = preview_width, height = height }
-	if float.set_win_config then
-		float:set_win_config(geometry)
-	else
-		api.nvim_win_set_config(float.id, geometry)
-	end
+	api.nvim_win_set_config(float.id, geometry)
+	float.geometry = geometry
+	scrollbar(float)
 	if not changed then
 		return
 	end
@@ -343,9 +388,10 @@ function M.preview(s, lines, config)
 end
 
 function M.close_float(float)
-	if float.close then
-		float:close()
-	elseif float.id and api.nvim_win_is_valid(float.id) then
+	if float.scrollbar then
+		M.close_float(float.scrollbar)
+	end
+	if float.id and api.nvim_win_is_valid(float.id) then
 		api.nvim_win_close(float.id, true)
 	end
 	if api.nvim_buf_is_valid(float.buf) then
