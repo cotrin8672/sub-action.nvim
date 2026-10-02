@@ -3,6 +3,12 @@ local alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
 
 function M.labels(entries, mode)
 	local labels, seeds, initials, counts = {}, {}, {}, {}
+	if mode == "off" then
+		for i = 1, #entries do
+			labels[i] = ""
+		end
+		return labels
+	end
 	for i, entry in ipairs(entries) do
 		local words = {}
 		for word in entry.action.title:lower():gmatch("[a-z0-9]+") do
@@ -19,11 +25,7 @@ function M.labels(entries, mode)
 		seeds[i] = tail == "" and first or first:sub(1, 1) .. tail .. first:sub(2)
 		counts[seeds[i]] = (counts[seeds[i]] or 0) + 1
 	end
-	if mode == "off" then
-		for i = 1, #entries do
-			labels[i] = ""
-		end
-	elseif mode == "mnemonic" then
+	if mode == "mnemonic" then
 		local used = {}
 		for i, entry in ipairs(entries) do
 			local candidates = initials[i] .. entry.action.title:lower() .. alphabet
@@ -40,21 +42,28 @@ function M.labels(entries, mode)
 			local suffix = string.format("%0" .. #tostring(#entries) .. "d", i)
 			seeds[i] = (counts[seed] > 1 and initials[i] .. suffix or seed) .. ":" .. suffix
 		end
-		-- ponytail: quadratic comparison is enough for cursor-local actions; use a trie for huge lists.
-		for i, seed in ipairs(seeds) do
-			for length = 1, #seed do
-				local prefix, unique = seed:sub(1, length), true
-				for j, other in ipairs(seeds) do
-					if i ~= j and other:sub(1, length) == prefix then
-						unique = false
-						break
-					end
-				end
-				if unique then
-					labels[i] = prefix
-					break
+		local order = {}
+		for i = 1, #seeds do
+			order[i] = i
+		end
+		table.sort(order, function(a, b)
+			return seeds[a] < seeds[b]
+		end)
+		local function shared(a, b)
+			local length = 0
+			if b then
+				while length < math.min(#a, #b) and a:byte(length + 1) == b:byte(length + 1) do
+					length = length + 1
 				end
 			end
+			return length
+		end
+		-- In lexical order, only the two neighbours can share the longest prefix.
+		for position, i in ipairs(order) do
+			labels[i] = seeds[i]:sub(
+				1,
+				1 + math.max(shared(seeds[i], seeds[order[position - 1]]), shared(seeds[i], seeds[order[position + 1]]))
+			)
 		end
 	end
 	return labels

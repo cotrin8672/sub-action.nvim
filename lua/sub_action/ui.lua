@@ -1,6 +1,7 @@
 local M = {}
 local api = vim.api
 local ns = api.nvim_create_namespace("sub-action")
+local input_ns = api.nvim_create_namespace("sub-action.input")
 local width = vim.fn.strdisplaywidth
 
 local links = {
@@ -115,6 +116,7 @@ end
 
 local function show(s, kind, lines, options, geometry)
 	local float = s[kind]
+	local created = not float
 	if not float then
 		local blink = package.loaded["blink.cmp.config"] and require("blink.cmp.lib.window")
 		if blink then
@@ -127,10 +129,14 @@ local function show(s, kind, lines, options, geometry)
 		vim.bo[float.buf].bufhidden = "wipe"
 		vim.bo[float.buf].filetype = options.filetype
 	end
-	vim.bo[float.buf].modifiable = true
-	api.nvim_buf_set_lines(float.buf, 0, -1, false, lines)
-	vim.bo[float.buf].modifiable = false
-	api.nvim_buf_clear_namespace(float.buf, ns, 0, -1)
+	local changed = float.lines ~= lines
+	if changed then
+		vim.bo[float.buf].modifiable = true
+		api.nvim_buf_set_lines(float.buf, 0, -1, false, lines)
+		vim.bo[float.buf].modifiable = false
+		api.nvim_buf_clear_namespace(float.buf, ns, 0, -1)
+		float.lines = lines
+	end
 	local border = options.border == "padded" and { " ", "", "", " ", "", "", " ", " " } or options.border
 	local win_config = vim.tbl_extend("force", {
 		relative = "editor",
@@ -139,21 +145,26 @@ local function show(s, kind, lines, options, geometry)
 		border = border,
 		zindex = 1001,
 	}, geometry)
-	if float.open then
-		float:open()
-		float:set_win_config(win_config)
-	elseif float.id and api.nvim_win_is_valid(float.id) then
-		api.nvim_win_set_config(float.id, win_config)
-	else
-		float.id = api.nvim_open_win(float.buf, false, win_config)
+	if created or changed or not vim.deep_equal(float.geometry, geometry) then
+		if float.open then
+			float:open()
+			float:set_win_config(win_config)
+		elseif float.id and api.nvim_win_is_valid(float.id) then
+			api.nvim_win_set_config(float.id, win_config)
+		else
+			float.id = api.nvim_open_win(float.buf, false, win_config)
+		end
+		float.geometry = geometry
 	end
-	vim.wo[float.id].winblend = options.winblend
-	vim.wo[float.id].winhighlight = options.winhighlight
-	vim.wo[float.id].wrap = options.wrap
-	vim.wo[float.id].linebreak = options.linebreak
-	vim.wo[float.id].scrolloff = options.scrolloff
-	vim.wo[float.id].cursorlineopt = "line"
-	return float
+	if created then
+		vim.wo[float.id].winblend = options.winblend
+		vim.wo[float.id].winhighlight = options.winhighlight
+		vim.wo[float.id].wrap = options.wrap
+		vim.wo[float.id].linebreak = options.linebreak
+		vim.wo[float.id].scrolloff = options.scrolloff
+		vim.wo[float.id].cursorlineopt = "line"
+	end
+	return float, changed
 end
 
 local function mark(buffer, row, start, finish, group, priority)
@@ -169,6 +180,7 @@ end
 function M.menu(s, config)
 	local options = style("action", config.ui.action)
 	local padding = type(options.padding) == "table" and options.padding or { options.padding, options.padding }
+	s.menu_options, s.label_start, s.marked_input = options, padding[1], nil
 	local names, titles, label_width, name_width, title_width = {}, {}, 0, 0, 0
 	for i, entry in ipairs(s.actions) do
 		titles[i] = entry.action.title:gsub("[\r\n\t]", " ")
@@ -216,18 +228,15 @@ function M.menu(s, config)
 	local geometry = { row = row, col = col, width = menu_width, height = height }
 	s.geometry = { row = row, col = col, width = menu_width + horizontal, height = height + vertical }
 	local float = show(s, "action", lines, options, geometry)
+	float.selection = nil
+	api.nvim_buf_clear_namespace(float.buf, input_ns, 0, -1)
 	vim.wo[float.id].cursorline = true
-	if float.set_cursor then
-		float:set_cursor({ s.selected, 0 })
-	else
-		api.nvim_win_set_cursor(float.id, { s.selected, 0 })
+	if float.cursor_line then
+		float.cursor_line:update(float.id)
 	end
 	for i, entry in ipairs(s.actions) do
 		local range = ranges[i]
 		mark(float.buf, i - 1, padding[1], padding[1] + #s.labels[i], "BlinkCmpKind")
-		if s.input ~= "" and s.labels[i]:sub(1, #s.input) == s.input then
-			mark(float.buf, i - 1, padding[1], padding[1] + #s.input, "BlinkCmpLabelMatch", 20000)
-		end
 		mark(
 			float.buf,
 			i - 1,
@@ -242,16 +251,51 @@ function M.menu(s, config)
 		local background = api.nvim_get_hl(0, { name = group, link = false }).bg
 		if background then
 			api.nvim_set_hl(0, "SubActionSelection", { bg = background })
-			api.nvim_buf_set_extmark(float.buf, ns, s.selected - 1, 0, {
-				line_hl_group = "SubActionSelection",
-				priority = options.cursorline_priority,
+			float.selection_group = "SubActionSelection"
+		end
+	end
+	M.select(s)
+end
+
+function M.select(s)
+	local float = s.action
+	if float.set_cursor then
+		float:set_cursor({ s.selected, 0 })
+	else
+		api.nvim_win_set_cursor(float.id, { s.selected, 0 })
+		if float.selection_group then
+			float.selection = api.nvim_buf_set_extmark(float.buf, ns, s.selected - 1, 0, {
+				id = float.selection,
+				line_hl_group = float.selection_group,
+				priority = s.menu_options.cursorline_priority,
+			})
+		end
+	end
+	if s.marked_input == s.input then
+		return
+	end
+	s.marked_input = s.input
+	api.nvim_buf_clear_namespace(float.buf, input_ns, 0, -1)
+	if s.input == "" then
+		return
+	end
+	for i, label in ipairs(s.labels) do
+		if label:sub(1, #s.input) == s.input then
+			api.nvim_buf_set_extmark(float.buf, input_ns, i - 1, s.label_start, {
+				end_col = s.label_start + #s.input,
+				hl_group = "BlinkCmpLabelMatch",
+				priority = 20000,
 			})
 		end
 	end
 end
 
 function M.preview(s, lines, config)
-	local options, anchor = style("preview", config.ui.preview), s.geometry
+	s.preview_options = s.preview_options or style("preview", config.ui.preview)
+	local options, anchor = s.preview_options, s.geometry
+	if s.preview and s.preview.lines == lines and s.preview.anchor == anchor then
+		return
+	end
 	local preview_width, height, horizontal, vertical = dimensions(lines, options)
 	local east, west = vim.o.columns - anchor.col - anchor.width - 1, anchor.col - 1
 	local right = east >= preview_width + horizontal or east >= west
@@ -266,7 +310,9 @@ function M.preview(s, lines, config)
 	preview_width = math.max(1, math.min(preview_width, available - horizontal))
 	local col = right and anchor.col + anchor.width + 1 or anchor.col - preview_width - horizontal - 1
 	local row = math.max(0, math.min(anchor.row, vim.o.lines - vim.o.cmdheight - 1 - height - vertical))
-	local float = show(s, "preview", lines, options, { row = row, col = col, width = preview_width, height = height })
+	local float, changed =
+		show(s, "preview", lines, options, { row = row, col = col, width = preview_width, height = height })
+	float.anchor = anchor
 	height = math.max(
 		1,
 		math.min(
@@ -281,6 +327,9 @@ function M.preview(s, lines, config)
 		float:set_win_config(geometry)
 	else
 		api.nvim_win_set_config(float.id, geometry)
+	end
+	if not changed then
+		return
 	end
 	for i, line in ipairs(lines) do
 		local group = line:match("^@@") and "DiffChange"

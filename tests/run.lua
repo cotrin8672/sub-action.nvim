@@ -57,6 +57,14 @@ local function check(name, fn)
 end
 
 local function run()
+	check("setup loads no session, UI, ranking, or submode modules", function()
+		local plugin = require("sub_action")
+		plugin.setup()
+		plugin.close()
+		for name in pairs(package.loaded) do
+			assert(not name:match("^sub_action%.") and not name:match("^nvim%-submode"), name .. " loaded during setup")
+		end
+	end)
 	local shortcuts = require("sub_action.shortcut")
 	check("shortcuts and collisions", function()
 		local actions = entries({ "Import Foo", "Import Bar", "Implement members" })
@@ -265,6 +273,15 @@ local function run()
 			return false
 		end)
 		equal(floats().menu, windows.menu)
+		local selection = vim.wo[windows.menu].winhighlight:match("CursorLine:([^,]+)")
+		local original_selection = vim.api.nvim_get_hl(0, { name = selection, link = false })
+		vim.api.nvim_set_hl(0, selection, { bg = 0x123456 })
+		vim.api.nvim_exec_autocmds("ColorScheme", {})
+		local drawn_selection = vim.env.SUB_ACTION_BLINK and "BlinkCmpCursorLineSub_action_actionHack"
+			or "SubActionSelection"
+		equal(vim.api.nvim_get_hl(0, { name = drawn_selection, link = false }).bg, 0x123456)
+		vim.api.nvim_set_hl(0, selection, original_selection)
+		vim.api.nvim_exec_autocmds("ColorScheme", {})
 		if vim.env.SUB_ACTION_BLINK then
 			local blink = require("blink.cmp.config")
 			equal(vim.wo[windows.menu].winblend, blink.completion.menu.winblend)
@@ -352,10 +369,13 @@ local function run()
 			return #one.resolvers == 2
 		end)
 		key("<CR>")
-		assert(floats().menu)
+		equal(floats(), {})
+		local tabs = tab_count
+		key("<Tab>")
+		equal(tab_count, tabs + 1)
 		one.resolvers[2](nil, { title = "Delayed", edit = edit })
 		wait(function()
-			return floats().menu == nil
+			return vim.api.nvim_buf_get_lines(source, 0, 1, false)[1] == "use crate::Foo;"
 		end)
 		vim.api.nvim_buf_set_lines(source, 0, -1, false, original)
 		open()
@@ -363,6 +383,23 @@ local function run()
 			return #one.resolvers == 3
 		end)
 		key("<Esc>")
+		open()
+		wait(function()
+			return #one.resolvers == 4
+		end)
+		local notify, messages = vim.notify, {}
+		vim.notify = function(message)
+			messages[#messages + 1] = message
+		end
+		key("<CR>iCHANGED<Esc>")
+		local changed = vim.api.nvim_buf_get_lines(source, 0, -1, false)
+		one.resolvers[4](nil, { title = "Delayed", edit = edit })
+		wait(function()
+			return #messages > 0
+		end)
+		equal(vim.api.nvim_buf_get_lines(source, 0, -1, false), changed)
+		vim.notify = notify
+		vim.api.nvim_buf_set_lines(source, 0, -1, false, original)
 		one.resolvers[3](nil, { title = "Delayed", edit = edit })
 		vim.wait(30, function()
 			return false
@@ -370,6 +407,55 @@ local function run()
 		equal(floats(), {})
 		equal(vim.api.nvim_buf_get_lines(source, 0, -1, false), original)
 		assert(#one.cancelled > 0)
+	end)
+
+	check("batched keys keep their order, reuse the menu/diff, and release input immediately", function()
+		setup({ shortcut = { mode = "off" } })
+		one.actions = { { title = "Edit", edit = edit }, command("Command"), command("Other") }
+		local ui, menu_calls, preview_calls = require("sub_action.ui"), 0, 0
+		local menu, preview = ui.menu, bridge.preview
+		ui.menu = function(...)
+			menu_calls = menu_calls + 1
+			return menu(...)
+		end
+		bridge.preview = function(...)
+			preview_calls = preview_calls + 1
+			return preview(...)
+		end
+		open()
+		local window = floats().menu
+		local tick = vim.api.nvim_buf_get_changedtick(vim.api.nvim_win_get_buf(window))
+		key("<Tab><S-Tab>")
+		equal(preview_calls, 1)
+		equal(menu_calls, 1)
+		equal(vim.api.nvim_buf_get_changedtick(vim.api.nvim_win_get_buf(window)), tick)
+		key(string.rep("<Tab>", 101) .. string.rep("<S-Tab>", 100))
+		equal(vim.api.nvim_win_get_cursor(window)[1], 2)
+		equal(menu_calls, 1)
+		local commands, tabs = #one.commands, tab_count
+		key("<CR><Tab>")
+		equal(tab_count, tabs + 1)
+		wait(function()
+			return #one.commands == commands + 1
+		end)
+		equal(one.commands[#one.commands].arguments, { "Command" })
+		ui.menu, bridge.preview = menu, preview
+		vim.lsp.commands["test.ready"] = function() end
+		one.actions = { { title = "Ready edit", edit = edit, command = { command = "test.ready" } } }
+		open()
+		-- No sleeps between confirming, entering Insert mode, typing, and Escape.
+		vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>iXYZ<Esc>", true, false, true), "mtx", false)
+		equal(vim.api.nvim_buf_get_lines(source, 0, 1, false), { "use crate::Foo;" })
+		assert(table.concat(vim.api.nvim_buf_get_lines(source, 0, -1, false), "\n"):find("XYZ", 1, true))
+		equal(floats(), {})
+		vim.lsp.commands["test.ready"] = nil
+		vim.api.nvim_buf_set_lines(source, 0, -1, false, original)
+		setup({ shortcut = { mode = "mnemonic" } })
+		one.actions = { command("Unique") }
+		open()
+		tabs = tab_count
+		key("u<Tab>")
+		equal(tab_count, tabs + 1)
 	end)
 
 	check("frequency persists per filetype and ties keep server order", function()
@@ -383,6 +469,13 @@ local function run()
 			{ "A", "B", "C" }
 		)
 		ranking.record(actions[2].action, "rust")
+		local path = vim.fn.stdpath("state") .. "/sub-action.json"
+		assert(vim.fn.filereadable(path) == 0, "record wrote synchronously")
+		ranking.flush()
+		ranking.record(actions[2].action, "rust")
+		ranking.flush(true)
+		local persisted = vim.json.decode(table.concat(vim.fn.readfile(path), "\n"))
+		equal(persisted.rust[vim.json.encode({ "", "B" })], 2)
 		package.loaded["sub_action.ranking"] = nil
 		ranking = require("sub_action.ranking")
 		ranking.sort(actions, "rust")
@@ -417,6 +510,7 @@ local function run()
 		open()
 		key("<CR>")
 		equal(called, 1)
+		require("sub_action.ranking").flush(true)
 		local path = vim.fn.stdpath("state") .. "/sub-action.json"
 		local state = vim.json.decode(table.concat(vim.fn.readfile(path), "\n"))
 		equal(state.rust[vim.json.encode({ "", "Local command" })], 1)
@@ -431,11 +525,51 @@ local function run()
 		one.actions = { { title = "Disabled", disabled = { reason = "expected disabled" }, edit = edit } }
 		open()
 		key("<CR>")
+		require("sub_action.ranking").flush(true)
 		equal(vim.json.decode(table.concat(vim.fn.readfile(path), "\n")), state)
 		equal(vim.api.nvim_buf_get_lines(source, 0, -1, false), original)
 		vim.notify = notify
 		vim.lsp.commands["test.local"] = nil
 		setup()
+	end)
+
+	check("deferred saves, failed renames, exit flush, and damaged files preserve counts", function()
+		local ranking = require("sub_action.ranking")
+		local path = vim.fn.stdpath("state") .. "/sub-action.json"
+		local function state()
+			return vim.json.decode(table.concat(vim.fn.readfile(path), "\n"))
+		end
+		local before = state()
+		ranking.record({ title = "Deferred" }, "lua")
+		equal(state(), before)
+		wait(function()
+			return state().lua ~= nil
+		end)
+		equal(state().lua[vim.json.encode({ "", "Deferred" })], 1)
+		local rename, notify, messages = vim.uv.fs_rename, vim.notify, {}
+		vim.notify = function(message)
+			messages[#messages + 1] = message
+		end
+		vim.uv.fs_rename = function(_, _, callback)
+			callback("expected rename failure")
+		end
+		before = state()
+		ranking.record({ title = "Retry" }, "lua")
+		ranking.flush()
+		wait(function()
+			return #messages > 0
+		end)
+		equal(state(), before)
+		vim.uv.fs_rename = rename
+		vim.api.nvim_exec_autocmds("VimLeavePre", {})
+		equal(state().lua[vim.json.encode({ "", "Retry" })], 1)
+		vim.fn.writefile({ "damaged JSON" }, path)
+		package.loaded["sub_action.ranking"] = nil
+		ranking = require("sub_action.ranking")
+		ranking.record({ title = "Keep damaged file" }, "lua")
+		ranking.flush(true)
+		equal(vim.fn.readfile(path), { "damaged JSON" })
+		vim.notify = notify
 	end)
 
 	check("movement and source edits close the session", function()
