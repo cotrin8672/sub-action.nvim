@@ -1,0 +1,30 @@
+name: Test
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        neovim: [v0.11.5, stable]
+        blink: [none, main]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.neovim }}
+      - name: Get submode
+        run: |
+          git clone https://github.com/sirasagi62/nvim-submode .deps/nvim-submode
+          git -C .deps/nvim-submode checkout b427aef5da3a0ca3edab6ac0da9b66d454e2a52f
+      - name: Get Blink
+        if: matrix.blink != 'none'
+        run: |
+          git clone --depth 1 --branch '${{ matrix.blink }}' https://github.com/Saghen/blink.cmp .deps/blink.cmp
+          echo "SUB_ACTION_BLINK=$PWD/.deps/blink.cmp" >> "$GITHUB_ENV"
+          git clone --depth 1 https://github.com/Saghen/blink.lib .deps/blink.lib
+          echo "SUB_ACTION_BLINK_LIB=$PWD/.deps/blink.lib" >> "$GITHUB_ENV"
+      - name: Check
+        run: nvim --headless -u NONE -l tests/run.lua
