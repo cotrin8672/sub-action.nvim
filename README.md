@@ -14,7 +14,6 @@ Requires Neovim **0.11+** and an LSP with code actions. With
 {
   "cotrin8672/sub-action.nvim",
   dependencies = { "sirasagi62/nvim-submode" },
-  opts = {},
   keys = {
     { "gra", function() require("sub_action").open() end, desc = "Code actions" },
   },

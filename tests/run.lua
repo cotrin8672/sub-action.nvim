@@ -131,8 +131,8 @@ local function run()
 		equal(shortcuts.labels(actions, "prefix"), { "if", "ib", "im" })
 		equal(shortcuts.labels(actions, "mnemonic"), { "i", "b", "m" })
 		equal(shortcuts.labels(actions, "off"), { "", "", "" })
-		equal(shortcuts.match({ "if", "ib", "im" }, "i"), { 1, 2, 3 })
-		equal(shortcuts.match({ "if", "ib", "im" }, "ib"), { 2 })
+		equal({ shortcuts.match({ "if", "ib", "im" }, "i") }, { 1, 3 })
+		equal({ shortcuts.match({ "if", "ib", "im" }, "ib") }, { 2, 1 })
 		local labels =
 			shortcuts.labels(entries({ "Import Foo", "Import Foo", "I", "I1", "日本語", "a1", "a" }), "prefix")
 		equal(#labels, 7)
@@ -747,12 +747,14 @@ local function run()
 		vim.uv.fs_rename = rename
 		vim.api.nvim_exec_autocmds("VimLeavePre", {})
 		equal(state().lua[vim.json.encode({ "", "Retry" })], 1)
-		vim.fn.writefile({ "damaged JSON" }, path)
-		package.loaded["sub_action.ranking"] = nil
-		ranking = require("sub_action.ranking")
-		ranking.record({ title = "Keep damaged file" }, "lua")
-		ranking.flush(true)
-		equal(vim.fn.readfile(path), { "damaged JSON" })
+		for _, invalid in ipairs({ "damaged JSON", '{"lua":{"invalid":-1}}' }) do
+			vim.fn.writefile({ invalid }, path)
+			package.loaded["sub_action.ranking"] = nil
+			ranking = require("sub_action.ranking")
+			ranking.record({ title = "Keep damaged file" }, "lua")
+			ranking.flush(true)
+			equal(vim.fn.readfile(path), { invalid })
+		end
 		vim.notify = notify
 	end)
 
@@ -794,9 +796,14 @@ local function run()
 		end
 		plugin.close()
 		vim.o.columns, vim.o.lines = 20, 12
+		one.actions = { command(string.rep("😀日é", 16)) }
+		setup({ client = { display = "none" }, ui = { action = { border = "rounded" } } })
 		open()
 		local c = vim.api.nvim_win_get_config(floats().menu)
 		assert(c.width + 2 <= vim.o.columns)
+		local line = text(floats().menu)
+		assert(line:find("é", 1, true) and line:find("…", 1, true))
+		assert(vim.fn.strdisplaywidth(line) <= c.width)
 		plugin.close()
 	end)
 	for _, state in ipairs(servers) do

@@ -38,19 +38,45 @@ local function check_options(opts, template, path)
 		local field = path .. "." .. tostring(name)
 		assert(default ~= nil, "unknown option: " .. field)
 		local kind = type(value)
-		assert(
-			kind == type(default) or (name == "border" and kind == "table") or (name == "color" and value == false),
-			field .. " has an invalid type"
-		)
-		if kind == "table" and name ~= "keymap" and name ~= "icons" and name ~= "border" then
+		if name ~= "color" or value ~= false then
+			vim.validate(field, value, name == "border" and { "string", "table" } or type(default))
+		end
+		if name == "mode" then
+			assert(vim.tbl_contains({ "prefix", "mnemonic", "off" }, value), "invalid " .. field)
+		elseif name == "display" then
+			assert(vim.tbl_contains({ "name", "icon", "none" }, value), "invalid " .. field)
+		elseif name == "color" then
+			assert(value == false or value:match("^#%x%x%x%x%x%x$"), "color must be a #RRGGBB string or false")
+		elseif name == "max_width" or name == "max_height" or name == "winblend" then
+			assert(
+				value % 1 == 0 and value >= (name == "winblend" and 0 or 1) and (name ~= "winblend" or value <= 100),
+				"invalid " .. field
+			)
+		elseif name == "icons" then
+			for client, icon in pairs(value) do
+				vim.validate("client name", client, "string")
+				vim.validate("client icon", icon, "string")
+			end
+		elseif name == "border" then
+			if kind == "string" then
+				assert(
+					vim.tbl_contains({ "none", "single", "double", "rounded", "solid", "shadow", "padded" }, value),
+					"invalid border"
+				)
+			else
+				assert(vim.tbl_contains({ 1, 2, 4, 8 }, #value), "border must have 1, 2, 4, or 8 entries")
+				for _, char in ipairs(value) do
+					if type(char) == "table" then
+						assert(#char == 2 and type(char[2]) == "string", "invalid border highlight")
+						char = char[1]
+					end
+					assert(type(char) == "string" and vim.fn.strdisplaywidth(char) <= 1, "invalid border character")
+				end
+			end
+		elseif kind == "table" and name ~= "keymap" then
 			check_options(value, default, field)
 		end
 	end
-end
-
-local function check_shortcut(shortcut)
-	local mode = shortcut.mode
-	assert(mode == "prefix" or mode == "mnemonic" or mode == "off", "invalid shortcut.mode")
 end
 
 function M.close()
@@ -67,7 +93,6 @@ function M.open(opts)
 		check_options(opts, { shortcut = defaults.shortcut }, "open")
 		if opts.shortcut then
 			local shortcut = vim.tbl_extend("force", options.shortcut, opts.shortcut)
-			check_shortcut(shortcut)
 			options = vim.tbl_extend("force", options, { shortcut = shortcut })
 		end
 	end
@@ -77,62 +102,23 @@ end
 function M.setup(opts)
 	opts = opts == nil and {} or opts
 	check_options(opts, defaults, "setup")
-	if next(opts) == nil then
-		M.close()
-		config = defaults
-		return
-	end
-	local next_config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts)
-	check_shortcut(next_config.shortcut)
-	assert(vim.tbl_contains({ "name", "icon", "none" }, next_config.client.display), "invalid client display")
-	for name, icon in pairs(next_config.client.icons) do
-		assert(type(name) == "string" and type(icon) == "string", "client.icons must map names to strings")
-	end
-	assert(
-		next_config.color == false
-			or (type(next_config.color) == "string" and next_config.color:match("^#%x%x%x%x%x%x$")),
-		"color must be a #RRGGBB string or false"
-	)
-	local seen = {}
-	for lhs, action in pairs(next_config.keymap) do
-		assert(type(lhs) == "string" and lhs ~= "" and not lhs:find("<any>", 1, true), "invalid keymap key")
-		local key = vim.fn.keytrans(vim.api.nvim_replace_termcodes(lhs, true, false, true))
-		assert(key ~= "<Esc>" or action == "close", "Esc can only be mapped to close")
-		assert(
-			action == false or vim.tbl_contains({ "next", "prev", "apply", "backspace", "close" }, action),
-			"invalid keymap action for " .. lhs
-		)
-		if action ~= false then
-			assert(not seen[key], "duplicate keymap key: " .. lhs)
-			seen[key] = true
-		end
-	end
-	for _, window in pairs(next_config.ui) do
-		for _, dimension in ipairs({ "max_width", "max_height" }) do
-			local value = window[dimension]
+	local next_config = next(opts) and vim.tbl_deep_extend("force", defaults, opts) or defaults
+	if opts.keymap then
+		local keys = {}
+		for lhs, action in pairs(next_config.keymap) do
+			assert(type(lhs) == "string" and lhs ~= "" and not lhs:find("<any>", 1, true), "invalid keymap key")
+			local key = vim.fn.keytrans(vim.api.nvim_replace_termcodes(lhs, true, false, true))
+			assert(key ~= "<Esc>" or action == "close", "Esc can only be mapped to close")
 			assert(
-				type(value) == "number" and value >= 1 and value == math.floor(value),
-				dimension .. " must be a positive integer"
+				action == false or vim.tbl_contains({ "next", "prev", "apply", "backspace", "close" }, action),
+				"invalid keymap action for " .. lhs
 			)
-		end
-		local blend = window.winblend or 0
-		assert(blend >= 0 and blend <= 100 and blend % 1 == 0, "invalid winblend")
-		local border = window.border
-		if type(border) == "string" then
-			assert(
-				vim.tbl_contains({ "none", "single", "double", "rounded", "solid", "shadow", "padded" }, border),
-				"invalid border"
-			)
-		elseif border then
-			assert(vim.tbl_contains({ 1, 2, 4, 8 }, #border), "border must have 1, 2, 4, or 8 entries")
-			for _, char in ipairs(border) do
-				if type(char) == "table" then
-					assert(#char == 2 and type(char[2]) == "string", "invalid border highlight")
-					char = char[1]
-				end
-				assert(type(char) == "string" and vim.fn.strdisplaywidth(char) <= 1, "invalid border character")
+			if action ~= false then
+				assert(not keys[key], "duplicate keymap key: " .. lhs)
+				keys[key] = action
 			end
 		end
+		next_config.keymap = keys
 	end
 	M.close()
 	config = next_config

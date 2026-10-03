@@ -12,19 +12,21 @@ local function load()
 		return
 	end
 	local ok, data = pcall(function()
-		return vim.json.decode(table.concat(vim.fn.readfile(path), "\n"))
-	end)
-	if ok and type(data) == "table" then
+		local data = vim.json.decode(table.concat(vim.fn.readfile(path), "\n"))
+		vim.validate("frequency file", data, "table")
 		for ft, values in pairs(data) do
-			if type(ft) == "string" and type(values) == "table" then
-				counts[ft] = {}
-				for key, count in pairs(values) do
-					if type(key) == "string" and type(count) == "number" and count >= 0 then
-						counts[ft][key] = count
-					end
-				end
+			vim.validate("filetype", ft, "string")
+			vim.validate("frequencies", values, "table")
+			for key, count in pairs(values) do
+				vim.validate("frequency key", key, "string")
+				vim.validate("frequency count", count, "number")
+				assert(count >= 0 and count % 1 == 0, "invalid frequency count")
 			end
 		end
+		return data
+	end)
+	if ok then
+		counts = data
 	else
 		damaged = true
 		vim.notify("sub-action: unreadable frequency file; preserving " .. path, vim.log.levels.WARN)
@@ -58,29 +60,27 @@ end
 
 local function schedule_save()
 	timer = timer or uv.new_timer()
-	timer:start(
-		1000,
-		0,
-		vim.schedule_wrap(function()
-			M.flush()
-		end)
+	timer:start(1000, 0, vim.schedule_wrap(M.flush))
+end
+
+local function wait_for_save()
+	assert(
+		vim.wait(5000, function()
+			return not saving
+		end, 1),
+		"sub-action: frequency save still pending"
 	)
 end
 
-function M.flush(synchronous)
+function M.flush(wait)
 	if timer then
 		timer:stop()
 	end
 	if saving then
-		if not synchronous then
+		if not wait then
 			return
 		end
-		assert(
-			vim.wait(5000, function()
-				return not saving
-			end, 1),
-			"sub-action: frequency save still pending"
-		)
+		wait_for_save()
 	end
 	if not dirty or damaged then
 		return
@@ -99,31 +99,16 @@ function M.flush(synchronous)
 		failure(data)
 		return
 	end
-	if synchronous then
-		local written, err = pcall(function()
-			assert(vim.fn.writefile({ data:sub(1, -2) }, temporary) == 0)
-			assert(uv.fs_rename(temporary, path))
-		end)
-		if written then
-			dirty = false
-		else
-			vim.fn.delete(temporary)
-			failure(err)
-		end
-		return
-	end
 	dirty, saving = false, true
 	local function finish(err)
-		local function complete()
-			vim.schedule(function()
-				saving = false
-				if err then
-					failure(err)
-				elseif dirty then
-					schedule_save()
-				end
-			end)
-		end
+		local complete = vim.schedule_wrap(function()
+			saving = false
+			if err then
+				failure(err)
+			elseif dirty then
+				schedule_save()
+			end
+		end)
 		-- Finish cleanup before another save can reuse this temporary filename.
 		if err then
 			uv.fs_unlink(temporary, complete)
@@ -147,6 +132,9 @@ function M.flush(synchronous)
 			end)
 		end)
 	end)
+	if wait then
+		wait_for_save()
+	end
 end
 
 function M.record(action, filetype, id)

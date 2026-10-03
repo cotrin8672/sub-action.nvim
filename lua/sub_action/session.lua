@@ -1,5 +1,6 @@
 local M = {}
 local api = vim.api
+local events = api.nvim_create_augroup("sub-action", { clear = true })
 local lsp = require("sub_action.lsp")
 local ui = require("sub_action.ui")
 local shortcut = require("sub_action.shortcut")
@@ -43,9 +44,7 @@ function M.close(keep)
 			entry.client:cancel_request(entry.request_id)
 		end
 	end
-	for _, id in ipairs(s.events) do
-		pcall(api.nvim_del_autocmd, id)
-	end
+	api.nvim_clear_autocmds({ group = events })
 	ui.close(s)
 end
 
@@ -163,15 +162,15 @@ local function typed(s, char)
 		return
 	end
 	s.input = s.input .. char:lower()
-	local matches = shortcut.match(s.labels, s.input)
-	if #matches == 0 then
+	local first, count = shortcut.match(s.labels, s.input)
+	if count == 0 then
 		s.input = ""
 		render(s)
-	elseif #matches == 1 then
-		s.selected = matches[1]
+	elseif count == 1 then
+		s.selected = first
 		confirm(s)
-	elseif not vim.tbl_contains(matches, s.selected) then
-		select(s, matches[1])
+	elseif s.labels[s.selected]:sub(1, #s.input) ~= s.input then
+		select(s, first)
 	else
 		render(s)
 	end
@@ -207,12 +206,7 @@ local function enter(s)
 		},
 	}
 	for lhs, action in pairs(s.config.keymap) do
-		if action ~= false then
-			mappings[#mappings + 1] = {
-				lhs = vim.fn.keytrans(api.nvim_replace_termcodes(lhs, true, false, true)),
-				action = handlers[action],
-			}
-		end
+		mappings[#mappings + 1] = { lhs = lhs, action = handlers[action] }
 	end
 	runtime = require("nvim-submode.runtime").create({
 		id = "sub-action",
@@ -250,10 +244,10 @@ function M.open(config)
 		actions = {},
 		selected = 1,
 		input = "",
-		events = {},
 	}
 	current = s
-	s.events[1] = api.nvim_create_autocmd({ "CursorMoved", "TextChanged", "BufLeave", "WinLeave", "ModeChanged" }, {
+	api.nvim_create_autocmd({ "CursorMoved", "TextChanged", "BufLeave", "WinLeave", "ModeChanged" }, {
+		group = events,
 		callback = function()
 			vim.schedule(function()
 				if current == s and not valid(s) then
@@ -262,7 +256,8 @@ function M.open(config)
 			end)
 		end,
 	})
-	s.events[2] = api.nvim_create_autocmd({ "VimResized", "ColorScheme" }, {
+	api.nvim_create_autocmd({ "VimResized", "ColorScheme" }, {
+		group = events,
 		callback = function()
 			if valid(s) and #s.actions > 0 then
 				ui.menu(s, config)

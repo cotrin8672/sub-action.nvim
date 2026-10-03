@@ -70,13 +70,13 @@ function M.labels(entries, mode)
 end
 
 function M.match(labels, input)
-	local matches = {}
+	local first, count = nil, 0
 	for i, label in ipairs(labels) do
 		if label ~= "" and label:sub(1, #input) == input then
-			matches[#matches + 1] = i
+			first, count = first or i, count + 1
 		end
 	end
-	return matches
+	return first, count
 end
 
 return M

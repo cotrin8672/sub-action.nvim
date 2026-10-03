@@ -27,23 +27,12 @@ highlights()
 api.nvim_create_autocmd("ColorScheme", { callback = highlights })
 
 local function style(kind, options)
-	local border = options.border
-	if border == nil then
+	options = vim.tbl_extend("force", { winblend = vim.go.winblend }, options)
+	if options.border == nil then
 		local global = vim.opt.winborder:get()
-		border = #global > 1 and global or global[1] or (kind == "action" and "none" or "padded")
+		options.border = #global > 1 and global or global[1] or (kind == "action" and "none" or "padded")
 	end
-	return {
-		border = border,
-		winblend = options.winblend or vim.go.winblend,
-		winhighlight = options.winhighlight,
-		min_width = kind == "action" and 15 or 1,
-		max_height = options.max_height,
-		max_width = options.max_width,
-		scrolloff = kind == "action" and 2 or 0,
-		scrollbar = options.scrollbar,
-		wrap = kind == "preview",
-		filetype = kind == "action" and "sub-action" or "diff",
-	}
+	return options
 end
 
 local function borders(border)
@@ -76,25 +65,18 @@ local function clip(text, limit)
 	if limit <= 0 then
 		return ""
 	end
-	local result = ""
-	for char in text:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
-		if width(result .. char .. "…") > limit then
-			break
-		end
-		result = result .. char
+	local result = vim.fn.strcharpart(text, 0, limit - 1, true)
+	while width(result) > limit - 1 do
+		result = vim.fn.strcharpart(result, 0, vim.fn.strchars(result, true) - 1, true)
 	end
 	return result .. "…"
 end
 
-local function dimensions(lines, options)
-	local longest = options.min_width
-	for _, line in ipairs(lines) do
-		longest = math.max(longest, width(line))
-	end
+local function dimensions(longest, height, options)
 	local left, right, top, bottom = borders(options.border)
 	local columns, rows = vim.o.columns, vim.o.lines - vim.o.cmdheight - 1
 	return math.max(1, math.min(longest, options.max_width, columns - left - right)),
-		math.max(1, math.min(#lines, options.max_height, rows - top - bottom)),
+		math.max(1, math.min(height, options.max_height, rows - top - bottom)),
 		left + right,
 		top + bottom
 end
@@ -106,7 +88,7 @@ local function show(s, kind, lines, options, geometry)
 		float = { buf = api.nvim_create_buf(false, true) }
 		s[kind] = float
 		vim.bo[float.buf].bufhidden = "wipe"
-		vim.bo[float.buf].filetype = options.filetype
+		vim.bo[float.buf].filetype = kind == "action" and "sub-action" or "diff"
 		vim.bo[float.buf].tabstop = 1
 	end
 	float.config = options
@@ -137,13 +119,25 @@ local function show(s, kind, lines, options, geometry)
 	if created then
 		vim.wo[float.id].winblend = options.winblend
 		vim.wo[float.id].winhighlight = options.winhighlight
-		vim.wo[float.id].wrap = options.wrap
-		vim.wo[float.id].linebreak = options.wrap
-		vim.wo[float.id].scrolloff = options.scrolloff
+		vim.wo[float.id].wrap = kind == "preview"
+		vim.wo[float.id].linebreak = kind == "preview"
+		vim.wo[float.id].scrolloff = kind == "action" and 2 or 0
 		vim.wo[float.id].cursorlineopt = "line"
 		vim.wo[float.id].foldenable = false
 	end
 	return float, changed
+end
+
+local function close_float(float)
+	if float.scrollbar then
+		close_float(float.scrollbar)
+	end
+	if float.id and api.nvim_win_is_valid(float.id) then
+		api.nvim_win_close(float.id, true)
+	end
+	if api.nvim_buf_is_valid(float.buf) then
+		api.nvim_buf_delete(float.buf, { force = true })
+	end
 end
 
 local function scrollbar(float)
@@ -151,7 +145,7 @@ local function scrollbar(float)
 	local height, total = geometry.height, float.content_height
 	if not options.scrollbar or total <= height then
 		if float.scrollbar then
-			M.close_float(float.scrollbar)
+			close_float(float.scrollbar)
 			float.scrollbar = nil
 		end
 		return
@@ -165,7 +159,7 @@ local function scrollbar(float)
 	end
 	local thumb = math.max(1, math.floor(height * height / total + 0.5) - 1)
 	local top = math.max(0, vim.fn.line("w0", float.id) - 1)
-	if options.wrap and top > 0 then
+	if top > 0 and vim.wo[float.id].wrap then
 		top = api.nvim_win_text_height(float.id, { start_row = 0, end_row = top - 1 }).all
 	end
 	local offset = math.min(height - thumb, math.floor(top / (total - height) * (height - thumb) + 0.5))
@@ -227,7 +221,7 @@ end
 
 function M.menu(s, config)
 	local options = s.menu_options or style("action", config.ui.action)
-	s.menu_options, s.label_start, s.marked_input = options, 1, nil
+	s.menu_options, s.marked_input = options, nil
 	local names, titles, label_width, name_width, title_width = {}, {}, 0, 0, 0
 	for i, entry in ipairs(s.actions) do
 		titles[i] = entry.action.title:gsub("[\r\n\t]", " ")
@@ -241,9 +235,7 @@ function M.menu(s, config)
 	end
 	local prefix_size = label_width + (label_width > 0 and 2 or 1)
 	local longest = prefix_size + title_width + (name_width > 0 and 1 + name_width or 0) + 1
-	local menu_width, height, horizontal, vertical = dimensions({ string.rep(" ", longest) }, options)
-	height = math.min(#s.actions, config.ui.action.max_height, vim.o.lines - vim.o.cmdheight - 1 - vertical)
-	height = math.max(1, height)
+	local menu_width, height, horizontal, vertical = dimensions(math.max(15, longest), #s.actions, options)
 	-- Keep the action readable when a client name is unusually long.
 	local minimum_title = math.min(title_width, math.max(1, math.floor((menu_width - prefix_size) / 2)))
 	name_width = math.min(name_width, math.max(0, menu_width - prefix_size - 2 - minimum_title))
@@ -316,8 +308,8 @@ function M.select(s)
 	end
 	for i, label in ipairs(s.labels) do
 		if label:sub(1, #s.input) == s.input then
-			api.nvim_buf_set_extmark(float.buf, input_ns, i - 1, s.label_start, {
-				end_col = s.label_start + #s.input,
+			api.nvim_buf_set_extmark(float.buf, input_ns, i - 1, 1, {
+				end_col = 1 + #s.input,
 				hl_group = "BlinkCmpLabelMatch",
 				priority = 20000,
 			})
@@ -331,13 +323,17 @@ function M.preview(s, lines, config)
 	if s.preview and s.preview.lines == lines and s.preview.anchor == anchor then
 		return
 	end
-	local preview_width, height, horizontal, vertical = dimensions(lines, options)
+	local longest = 1
+	for _, line in ipairs(lines) do
+		longest = math.max(longest, width(line))
+	end
+	local preview_width, height, horizontal, vertical = dimensions(longest, #lines, options)
 	local east, west = vim.o.columns - anchor.col - anchor.width - 1, anchor.col - 1
 	local right = east >= preview_width + horizontal or east >= west
 	local available = right and east or west
 	if available <= horizontal then
 		if s.preview then
-			M.close_float(s.preview)
+			close_float(s.preview)
 			s.preview = nil
 		end
 		return
@@ -352,9 +348,10 @@ function M.preview(s, lines, config)
 	height =
 		math.max(1, math.min(float.content_height, options.max_height, vim.o.lines - vim.o.cmdheight - 1 - vertical))
 	row = math.max(0, math.min(anchor.row, vim.o.lines - vim.o.cmdheight - 1 - height - vertical))
-	local geometry = { relative = "editor", row = row, col = col, width = preview_width, height = height }
-	api.nvim_win_set_config(float.id, geometry)
-	float.geometry = geometry
+	if height ~= float.geometry.height or row ~= float.geometry.row then
+		api.nvim_win_set_config(float.id, { relative = "editor", row = row, col = col, height = height })
+		float.geometry.height, float.geometry.row = height, row
+	end
 	scrollbar(float)
 	if not changed then
 		return
@@ -370,22 +367,10 @@ function M.preview(s, lines, config)
 	end
 end
 
-function M.close_float(float)
-	if float.scrollbar then
-		M.close_float(float.scrollbar)
-	end
-	if float.id and api.nvim_win_is_valid(float.id) then
-		api.nvim_win_close(float.id, true)
-	end
-	if api.nvim_buf_is_valid(float.buf) then
-		api.nvim_buf_delete(float.buf, { force = true })
-	end
-end
-
 function M.close(s)
 	for _, kind in ipairs({ "action", "preview" }) do
 		if s[kind] then
-			M.close_float(s[kind])
+			close_float(s[kind])
 		end
 	end
 end
