@@ -3,7 +3,7 @@
 Blink-style LSP code actions in a Normal-mode submode. Your source buffer keeps
 focus; actions and a diff appear beside the cursor.
 
-![sub-action.nvim](assets/demo.png)
+![sub-action.nvim in WezTerm](assets/demo.png)
 
 ## Installation
 
