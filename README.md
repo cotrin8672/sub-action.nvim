@@ -13,6 +13,7 @@ Requires Neovim **0.11+** and an LSP with code actions. With
 ```lua
 {
   "cotrin8672/sub-action.nvim",
+  main = "sub_action",
   dependencies = {
     {
       "sirasagi62/nvim-submode",
@@ -20,6 +21,9 @@ Requires Neovim **0.11+** and an LSP with code actions. With
     },
   },
   opts = {},
+  keys = {
+    { "gra", function() require("sub_action").open() end, desc = "Code actions" },
+  },
 }
 ```
 
@@ -27,11 +31,14 @@ Native floats match Blink v2's spacing, selection, scrollbars, and theme
 highlights. Blink is neither required nor loaded. No `nvim-submode.setup()`
 call is needed.
 
+The plugin registers no Normal-mode mappings. Without lazy.nvim, use
+`vim.keymap.set("n", "gra", require("sub_action").open)`.
+
 ## Usage
 
 | Key | Action |
 | --- | --- |
-| `gra` | Open code actions |
+| `gra` (configured above) | Open code actions |
 | `Tab` / `Shift-Tab` | Next / previous action |
 | `Enter` | Apply and leave the submode |
 | `Esc` / `Ctrl-C` | Cancel |
@@ -40,27 +47,44 @@ call is needed.
 Shortcuts apply as soon as they become unique: `Import Foo`, `Import Bar`, and
 `Implement members` become `if`, `ib`, and `im`. Ordinary mappings resume on exit.
 Moving or editing the source, switching windows, or leaving Normal mode cancels.
+`Esc` is nvim-submode's fixed cancel key. Other bindings belong to `keymap` below;
+disabled and unmapped keys are ignored inside the submode.
 
 ## Configuration
 
-Defaults, also usable without a plugin manager:
+Shared settings belong in `setup()` (or lazy.nvim's `opts`). Defaults:
 
 ```lua
 require("sub_action").setup({
-  mapping = "gra", -- false for your own mapping
-  color = "#E3A875", -- submode accent
+  color = "#E3A875", -- false disables the submode accent
   shortcut = { mode = "prefix" }, -- "prefix", "mnemonic", "off"
-  ui = {
-    action = { max_width = 50, max_height = 8 },
-    preview = { max_width = 70, max_height = 15 },
+  keymap = {
+    ["<Tab>"] = "next",
+    ["<S-Tab>"] = "prev",
+    ["<CR>"] = "apply",
+    ["<BS>"] = "backspace",
+    ["<C-c>"] = "close",
   },
-  ranking = { frequency = true },
+  ui = {
+    action = { max_width = 50, max_height = 8, border = "none", winblend = 0, scrollbar = true },
+    preview = { max_width = 70, max_height = 15, border = "padded", winblend = 0, scrollbar = true },
+  },
+  ranking = { frequency = false }, -- enable explicitly to rank and save history
   client = { display = "name", icons = {} }, -- "name", "icon", "none"
 })
 ```
 
-`.open()` and `.close()` are available. Window options also accept `border`,
-`winblend`, `winhighlight`, and `scrollbar`. The accent is exposed through
+Set a binding to `false` to disable it, e.g.
+`keymap = { ["<Tab>"] = false, ["<C-n>"] = "next" }`.
+`open()` uses shared settings without calling `setup()`. A call may override
+only the shortcut: `open({ shortcut = { mode = "mnemonic" } })`.
+`close()` cancels. Unknown options and invalid values are errors.
+
+Window `winhighlight` uses `BlinkCmpMenu`, `BlinkCmpMenuBorder`, and
+`BlinkCmpMenuSelection` for actions; `BlinkCmpDoc` and `BlinkCmpDocBorder` for
+previews. These theme groups fall back to native highlights. Borders are fixed
+defaults; global `winborder` is not inherited. Missing client icons are omitted.
+The accent is exposed through
 `require("nvim-submode").get_submode_color()` for statuslines and cursor colors.
 
 ## Performance
@@ -70,8 +94,8 @@ menu and cached diffs; rapid input coalesces preview work. Actions resolve ahead
 of apply, and confirming releases input immediately. Source edits during a
 pending resolve cancel that action.
 
-Frequency is kept per filetype, kind, and title. Saves are batched asynchronously
-and flushed on normal exit to `stdpath("state")/sub-action.json`.
+When enabled, frequency is kept per filetype, kind, and title. Saves are batched
+asynchronously and flushed on normal exit to `stdpath("state")/sub-action.json`.
 Concurrent processes use last-writer-wins.
 
 ## Development

@@ -178,11 +178,47 @@ local function typed(s, char)
 end
 
 local function enter(s)
+	local handlers = {
+		next = function()
+			s.input = ""
+			select(s, s.selected % #s.actions + 1)
+		end,
+		prev = function()
+			s.input = ""
+			select(s, (s.selected - 2) % #s.actions + 1)
+		end,
+		apply = function()
+			confirm(s)
+		end,
+		backspace = function()
+			s.input = s.input:sub(1, -2)
+			render(s)
+		end,
+		close = function()
+			runtime:stop()
+		end,
+	}
+	local mappings = {
+		{
+			lhs = "<any>",
+			action = function(context)
+				typed(s, context.input)
+			end,
+		},
+	}
+	for lhs, action in pairs(s.config.keymap) do
+		if action ~= false then
+			mappings[#mappings + 1] = {
+				lhs = vim.fn.keytrans(api.nvim_replace_termcodes(lhs, true, false, true)),
+				action = handlers[action],
+			}
+		end
+	end
 	runtime = require("nvim-submode.runtime").create({
 		id = "sub-action",
 		display_name = "CODE ACTION",
-		color = s.config.color,
-		options = { count = false, interrupt = "<C-c>" },
+		color = s.config.color or nil,
+		options = { count = false, interrupt = "" },
 		on_leave = function()
 			if current == s and not s.applying then
 				vim.schedule(function()
@@ -192,41 +228,7 @@ local function enter(s)
 				end)
 			end
 		end,
-		mappings = {
-			{
-				lhs = "<Tab>",
-				action = function()
-					s.input = ""
-					select(s, s.selected % #s.actions + 1)
-				end,
-			},
-			{
-				lhs = "<S-Tab>",
-				action = function()
-					s.input = ""
-					select(s, (s.selected - 2) % #s.actions + 1)
-				end,
-			},
-			{
-				lhs = "<CR>",
-				action = function()
-					confirm(s)
-				end,
-			},
-			{
-				lhs = "<BS>",
-				action = function()
-					s.input = s.input:sub(1, -2)
-					render(s)
-				end,
-			},
-			{
-				lhs = "<any>",
-				action = function(context)
-					typed(s, context.input)
-				end,
-			},
-		},
+		mappings = mappings,
 	})
 	runtime:start()
 	ui.menu(s, s.config)

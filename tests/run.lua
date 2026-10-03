@@ -53,12 +53,70 @@ local function check(name, fn)
 end
 
 local function run()
-	check("setup loads no session, UI, ranking, or submode modules", function()
+	check("setup preserves mappings and loads no session, UI, ranking, or submode modules", function()
 		local plugin = require("sub_action")
+		local mapping = function() end
+		vim.keymap.set("n", "gra", mapping)
 		plugin.setup()
 		plugin.close()
+		equal(vim.fn.maparg("gra", "n", false, true).callback, mapping)
 		for name in pairs(package.loaded) do
 			assert(not name:match("^sub_action%.") and not name:match("^nvim%-submode"), name .. " loaded during setup")
+		end
+	end)
+	check("open uses defaults without setup and only accepts a local shortcut override", function()
+		local plugin = package.loaded["sub_action"]
+		package.loaded["sub_action"] = nil
+		local fresh = require("sub_action")
+		local captured
+		package.loaded["sub_action.session"] = {
+			open = function(config)
+				captured = config
+			end,
+		}
+		fresh.setup = function()
+			error("open must not call setup")
+		end
+		fresh.open()
+		equal(captured.ranking.frequency, false)
+		equal(captured.color, "#E3A875")
+		fresh.open({ shortcut = { mode = "off" } })
+		equal(captured.shortcut.mode, "off")
+		equal(captured.color, "#E3A875")
+		fresh.open()
+		equal(captured.shortcut.mode, "prefix")
+		for _, options in ipairs({
+			{ color = "#123456" },
+			{ ranking = { frequency = true } },
+			{ shortcut = { mode = "typo" } },
+		}) do
+			assert(not pcall(fresh.open, options))
+		end
+		package.loaded["sub_action.session"] = nil
+		package.loaded["sub_action"] = plugin
+	end)
+	check("unknown options, wrong types, and invalid or conflicting mappings fail during setup", function()
+		local plugin = require("sub_action")
+		for _, options in ipairs({
+			false,
+			{ mapping = "gra" },
+			{ shorcut = {} },
+			{ shortcut = { mode = "typo" } },
+			{ shortcut = { typo = true } },
+			{ ranking = { frequency = "yes" } },
+			{ ui = { action = { padding = 2 } } },
+			{ ui = { action = { max_height = 0 } } },
+			{ ui = { preview = { scrollbar = 0 } } },
+			{ ui = { action = { winblend = 101 } } },
+			{ ui = { preview = { border = {} } } },
+			{ ui = { action = { border = { "wide" } } } },
+			{ client = { icons = { rust_analyzer = false } } },
+			{ keymap = { ["<Tab>"] = "typo" } },
+			{ keymap = { ["<Esc>"] = "next" } },
+			{ keymap = { ["<C-i>"] = "next" } },
+			{ keymap = { ["<any>"] = "apply" } },
+		}) do
+			assert(not pcall(plugin.setup, options), "accepted invalid options: " .. vim.inspect(options))
 		end
 	end)
 	local shortcuts = require("sub_action.shortcut")
@@ -232,11 +290,11 @@ local function run()
 	end)
 	local tab_mapping = vim.fn.maparg("<Tab>", "n", false, true)
 	local function setup(options)
-		plugin.setup(vim.tbl_deep_extend("force", { ranking = { frequency = false } }, options or {}))
+		plugin.setup(options)
 	end
-	local function open()
+	local function open(options)
 		vim.cmd.redraw()
-		plugin.open()
+		plugin.open(options)
 		wait(function()
 			return floats().menu ~= nil
 		end)
@@ -255,6 +313,8 @@ local function run()
 
 	check("multiple clients, non-focusable Blink-shaped floats, Tab and Escape", function()
 		local origin = vim.api.nvim_get_current_win()
+		local border = vim.o.winborder
+		vim.o.winborder = "rounded"
 		open()
 		local windows = floats()
 		equal(require("nvim-submode").get_submode_color(), "#E3A875")
@@ -263,6 +323,9 @@ local function run()
 		equal(vim.api.nvim_get_current_win(), origin)
 		assert(not vim.api.nvim_win_get_config(windows.menu).focusable)
 		assert(not vim.api.nvim_win_get_config(windows.preview).focusable)
+		local menu_border = vim.api.nvim_win_get_config(windows.menu).border
+		assert(menu_border == nil or menu_border == "none")
+		equal(vim.api.nvim_win_get_config(windows.preview).border, { " ", "", "", " ", "", "", " ", " " })
 		vim.api.nvim_exec_autocmds("CursorMoved", {})
 		vim.api.nvim_exec_autocmds("TextChanged", { buffer = source })
 		vim.wait(20, function()
@@ -291,6 +354,7 @@ local function run()
 		equal(vim.fn.maparg("<Tab>", "n", false, true).callback, tab_mapping.callback)
 		key("<Tab>")
 		equal(tab_count, 1)
+		vim.o.winborder = border
 	end)
 
 	check("native scrollbars follow selection, reuse windows, and close with their parent", function()
@@ -373,6 +437,56 @@ local function run()
 		end)
 		equal(floats(), {})
 	end)
+	check(
+		"submode mappings are configurable, disabled keys stay inactive, and shortcut overrides do not persist",
+		function()
+			local previous, commands = one.actions, #one.commands
+			one.actions = { command("Alpha"), command("Beta"), command("Gamma") }
+			setup({
+				color = false,
+				keymap = {
+					["<Tab>"] = false,
+					["<S-Tab>"] = false,
+					["<CR>"] = false,
+					["<BS>"] = false,
+					["<C-c>"] = false,
+					["<C-n>"] = "next",
+					["<C-p>"] = "prev",
+					["<C-y>"] = "apply",
+					q = "close",
+				},
+			})
+			open({ shortcut = { mode = "off" } })
+			local window = floats().menu
+			assert(text(window):match("^%s+Alpha"))
+			equal(require("nvim-submode").get_submode_color(), nil)
+			assert(not pcall(plugin.setup, { keymap = { ["<Tab>"] = "typo" } }))
+			equal(floats().menu, window)
+			key("<Tab><S-Tab><CR><C-c>")
+			equal(vim.api.nvim_win_get_cursor(window)[1], 1)
+			equal(#one.commands, commands)
+			key("<C-n>")
+			equal(vim.api.nvim_win_get_cursor(window)[1], 2)
+			key("<C-p>")
+			equal(vim.api.nvim_win_get_cursor(window)[1], 1)
+			key("<C-n><C-y>")
+			wait(function()
+				return #one.commands == commands + 1
+			end)
+			equal(one.commands[#one.commands].arguments, { "Beta" })
+			open()
+			assert(text(floats().menu):match("^%s+a%s+Alpha"))
+			key("q")
+			equal(floats(), {})
+			setup()
+			open()
+			key("<C-c>")
+			equal(floats(), {})
+			assert(not package.loaded["sub_action.ranking"])
+			equal(vim.fn.filereadable(vim.fn.stdpath("state") .. "/sub-action.json"), 0)
+			one.actions = previous
+		end
+	)
 
 	check("lazy resolve is cached; stale responses and cancellation are harmless", function()
 		setup()

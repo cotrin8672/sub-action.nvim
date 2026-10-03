@@ -1,13 +1,58 @@
 local M = {}
 local defaults = {
-	mapping = "gra",
 	color = "#E3A875",
 	shortcut = { mode = "prefix" },
-	ui = { action = { max_width = 50, max_height = 8 }, preview = { max_width = 70, max_height = 15 } },
-	ranking = { frequency = true },
+	keymap = {
+		["<Tab>"] = "next",
+		["<S-Tab>"] = "prev",
+		["<CR>"] = "apply",
+		["<BS>"] = "backspace",
+		["<C-c>"] = "close",
+	},
+	ui = {
+		action = {
+			max_width = 50,
+			max_height = 8,
+			border = "none",
+			winblend = 0,
+			scrollbar = true,
+			winhighlight = "Normal:BlinkCmpMenu,FloatBorder:BlinkCmpMenuBorder,CursorLine:BlinkCmpMenuSelection,Search:None,CurSearch:None",
+		},
+		preview = {
+			max_width = 70,
+			max_height = 15,
+			border = "padded",
+			winblend = 0,
+			scrollbar = true,
+			winhighlight = "Normal:BlinkCmpDoc,FloatBorder:BlinkCmpDocBorder,EndOfBuffer:BlinkCmpDoc",
+		},
+	},
+	ranking = { frequency = false },
 	client = { display = "name", icons = {} },
 }
 local config
+
+local function check_options(opts, template, path)
+	assert(type(opts) == "table", path .. " must be a table")
+	for name, value in pairs(opts) do
+		local default = template[name]
+		local field = path .. "." .. tostring(name)
+		assert(default ~= nil, "unknown option: " .. field)
+		local kind = type(value)
+		assert(
+			kind == type(default) or (name == "border" and kind == "table") or (name == "color" and value == false),
+			field .. " has an invalid type"
+		)
+		if kind == "table" and name ~= "keymap" and name ~= "icons" and name ~= "border" then
+			check_options(value, default, field)
+		end
+	end
+end
+
+local function check_shortcut(shortcut)
+	local mode = shortcut.mode
+	assert(mode == "prefix" or mode == "mnemonic" or mode == "off", "invalid shortcut.mode")
+end
 
 function M.close()
 	local session = package.loaded["sub_action.session"]
@@ -16,26 +61,54 @@ function M.close()
 	end
 end
 
-function M.open()
-	if not config then
-		M.setup()
+function M.open(opts)
+	assert(vim.fn.has("nvim-0.11") == 1, "sub-action requires Neovim 0.11+")
+	local options = config or defaults
+	if opts ~= nil then
+		check_options(opts, { shortcut = defaults.shortcut }, "open")
+		if opts.shortcut then
+			local shortcut = vim.tbl_extend("force", options.shortcut, opts.shortcut)
+			check_shortcut(shortcut)
+			options = vim.tbl_extend("force", options, { shortcut = shortcut })
+		end
 	end
-	require("sub_action.session").open(config)
+	require("sub_action.session").open(options)
 end
 
 function M.setup(opts)
-	M.close()
-	local next_config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
+	opts = opts == nil and {} or opts
+	check_options(opts, defaults, "setup")
+	if next(opts) == nil then
+		M.close()
+		config = defaults
+		return
+	end
+	local next_config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts)
 	assert(vim.fn.has("nvim-0.11") == 1, "sub-action requires Neovim 0.11+")
-	assert(type(next_config.mapping) == "string" or next_config.mapping == false, "mapping must be a string or false")
-	assert(vim.tbl_contains({ "prefix", "mnemonic", "off" }, next_config.shortcut.mode), "invalid shortcut mode")
+	check_shortcut(next_config.shortcut)
 	assert(vim.tbl_contains({ "name", "icon", "none" }, next_config.client.display), "invalid client display")
-	assert(type(next_config.client.icons) == "table", "client.icons must be a table")
-	assert(type(next_config.ranking.frequency) == "boolean", "ranking.frequency must be a boolean")
+	for name, icon in pairs(next_config.client.icons) do
+		assert(type(name) == "string" and type(icon) == "string", "client.icons must map names to strings")
+	end
 	assert(
-		next_config.color == nil or (type(next_config.color) == "string" and next_config.color:match("^#%x%x%x%x%x%x$")),
-		"color must be a #RRGGBB string"
+		next_config.color == false
+			or (type(next_config.color) == "string" and next_config.color:match("^#%x%x%x%x%x%x$")),
+		"color must be a #RRGGBB string or false"
 	)
+	local seen = {}
+	for lhs, action in pairs(next_config.keymap) do
+		assert(type(lhs) == "string" and lhs ~= "" and not lhs:find("<any>", 1, true), "invalid keymap key")
+		local key = vim.fn.keytrans(vim.api.nvim_replace_termcodes(lhs, true, false, true))
+		assert(key ~= "<Esc>", "Esc is the fixed submode cancel key")
+		assert(
+			action == false or vim.tbl_contains({ "next", "prev", "apply", "backspace", "close" }, action),
+			"invalid keymap action for " .. lhs
+		)
+		if action ~= false then
+			assert(not seen[key], "duplicate keymap key: " .. lhs)
+			seen[key] = true
+		end
+	end
 	for _, window in pairs(next_config.ui) do
 		for _, dimension in ipairs({ "max_width", "max_height" }) do
 			local value = window[dimension]
@@ -44,14 +117,26 @@ function M.setup(opts)
 				dimension .. " must be a positive integer"
 			)
 		end
+		assert(window.winblend >= 0 and window.winblend <= 100 and window.winblend % 1 == 0, "invalid winblend")
+		local border = window.border
+		if type(border) == "string" then
+			assert(
+				vim.tbl_contains({ "none", "single", "double", "rounded", "solid", "shadow", "padded" }, border),
+				"invalid border"
+			)
+		else
+			assert(vim.tbl_contains({ 1, 2, 4, 8 }, #border), "border must have 1, 2, 4, or 8 entries")
+			for _, char in ipairs(border) do
+				if type(char) == "table" then
+					assert(#char == 2 and type(char[2]) == "string", "invalid border highlight")
+					char = char[1]
+				end
+				assert(type(char) == "string" and vim.fn.strdisplaywidth(char) <= 1, "invalid border character")
+			end
+		end
 	end
-	if config and config.mapping and vim.fn.maparg(config.mapping, "n", false, true).callback == M.open then
-		vim.keymap.del("n", config.mapping)
-	end
+	M.close()
 	config = next_config
-	if config.mapping then
-		vim.keymap.set("n", config.mapping, M.open, { desc = "Code actions (sub-action)" })
-	end
 end
 
 return M

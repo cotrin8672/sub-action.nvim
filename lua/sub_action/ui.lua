@@ -27,28 +27,15 @@ highlights()
 api.nvim_create_autocmd("ColorScheme", { callback = highlights })
 
 local function style(kind, options)
-	local border = options.border
-	if not border then
-		local global = vim.opt.winborder:get()
-		border = #global == 1 and global[1] or global
-		if border == "" or #global == 0 then
-			border = kind == "preview" and "padded" or "none"
-		end
-	end
 	return {
-		border = border,
-		winblend = options.winblend or 0,
-		winhighlight = options.winhighlight
-			or (
-				kind == "action"
-					and "Normal:BlinkCmpMenu,FloatBorder:BlinkCmpMenuBorder,CursorLine:BlinkCmpMenuSelection,Search:None,CurSearch:None"
-				or "Normal:BlinkCmpDoc,FloatBorder:BlinkCmpDocBorder,EndOfBuffer:BlinkCmpDoc"
-			),
+		border = options.border,
+		winblend = options.winblend,
+		winhighlight = options.winhighlight,
 		min_width = kind == "action" and 15 or 1,
 		max_height = options.max_height,
 		max_width = options.max_width,
 		scrolloff = kind == "action" and 2 or 0,
-		scrollbar = options.scrollbar ~= false,
+		scrollbar = options.scrollbar,
 		padding = 1,
 		gap = 1,
 		wrap = kind == "preview",
@@ -243,7 +230,7 @@ function M.menu(s, config)
 	for i, entry in ipairs(s.actions) do
 		titles[i] = entry.action.title:gsub("[\r\n\t]", " ")
 		names[i] = config.client.display == "name" and entry.client.name
-			or config.client.display == "icon" and (config.client.icons[entry.client.name] or entry.client.name)
+			or config.client.display == "icon" and (config.client.icons[entry.client.name] or "")
 			or ""
 		label_width, name_width, title_width =
 			math.max(label_width, width(s.labels[i])),
@@ -302,7 +289,7 @@ function M.menu(s, config)
 		)
 		mark(float.buf, i - 1, range[3], range[4], "BlinkCmpSource")
 	end
-	local group = options.winhighlight:match("CursorLine:([^,]+)") or "BlinkCmpMenuSelection"
+	local group = options.winhighlight:match("CursorLine:([^,]+)") or "CursorLine"
 	local background = api.nvim_get_hl(0, { name = group, link = false }).bg
 	float.selection_group = nil
 	if background then
