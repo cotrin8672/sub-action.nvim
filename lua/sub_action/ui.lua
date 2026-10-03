@@ -3,6 +3,7 @@ local api = vim.api
 local ns = api.nvim_create_namespace("sub-action")
 local input_ns = api.nvim_create_namespace("sub-action.input")
 local width = vim.fn.strdisplaywidth
+local shortcut = require("sub_action.shortcut")
 
 local links = {
 	BlinkCmpMenu = "Pmenu",
@@ -127,7 +128,16 @@ local function show(s, kind, lines, options, geometry)
 	return float, changed
 end
 
+local function stop_loading(float)
+	if float.loading_timer then
+		float.loading_timer:stop()
+		float.loading_timer:close()
+		float.loading_timer = nil
+	end
+end
+
 local function close_float(float)
+	stop_loading(float)
 	if float.scrollbar then
 		close_float(float.scrollbar)
 	end
@@ -218,13 +228,36 @@ local function mark(buffer, row, start, finish, group, priority)
 	end
 end
 
+local function spin(float)
+	local frames = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+	local timer, frame, id = vim.uv.new_timer(), 0, nil
+	float.loading_timer = timer
+	local function draw()
+		if float.loading_timer ~= timer then
+			return
+		end
+		if not api.nvim_win_is_valid(float.id) or not api.nvim_buf_is_valid(float.buf) then
+			stop_loading(float)
+			return
+		end
+		frame = frame % #frames + 1
+		id = api.nvim_buf_set_extmark(float.buf, ns, math.floor((float.geometry.height - 1) / 2), 0, {
+			id = id,
+			virt_text = { { frames[frame], "BlinkCmpLabelMatch" } },
+			virt_text_win_col = math.max(0, math.floor((float.geometry.width - width(frames[frame])) / 2)),
+		})
+	end
+	draw()
+	timer:start(80, 80, vim.schedule_wrap(draw))
+end
+
 function M.menu(s, config)
 	local options = s.menu_options or style("action", config.ui.action)
 	s.menu_options, s.marked_input = options, nil
 	local display = config.client.display
 	if display == "auto" then
 		display = "none"
-		local first = s.actions[1].client
+		local first = s.actions[1] and s.actions[1].client
 		for _, entry in ipairs(s.actions) do
 			if (entry.client.id or entry.client.name) ~= (first.id or first.name) then
 				display = "name"
@@ -241,12 +274,20 @@ function M.menu(s, config)
 		name_width, title_width = math.max(name_width, width(names[i])), math.max(title_width, width(titles[i]))
 	end
 	local longest = title_width + (name_width > 0 and 1 + name_width or 0) + 2
-	local menu_width, height, horizontal, vertical = dimensions(math.max(15, longest), #s.actions, options)
+	local loading = #s.actions == 0
+	local menu_width, height, horizontal, vertical = dimensions(
+		loading and options.max_width or math.max(15, longest),
+		loading and options.max_height or #s.actions,
+		options
+	)
 	-- Keep the action readable when a client name is unusually long.
 	local minimum_title = math.min(title_width, math.max(1, math.floor((menu_width - 1) / 2)))
 	name_width = math.min(name_width, math.max(0, menu_width - 3 - minimum_title))
 	local title_space = math.max(0, menu_width - 2 - (name_width > 0 and 1 + name_width or 0))
 	local lines, ranges = {}, {}
+	if loading then
+		lines = vim.fn["repeat"]({ "" }, height)
+	end
 	for i, entry in ipairs(s.actions) do
 		local title, name = clip(titles[i], title_space), clip(names[i], name_width)
 		titles[i] = title:lower()
@@ -268,11 +309,15 @@ function M.menu(s, config)
 	local geometry = { row = row, col = col, width = menu_width, height = height }
 	s.geometry = { row = row, col = col, width = menu_width + horizontal, height = height + vertical }
 	local float = show(s, "action", lines, options, geometry)
+	stop_loading(float)
+	if #s.actions == 0 then
+		spin(float)
+	end
 	float.content_height = #lines
 	float.titles = titles
 	float.selection = nil
 	api.nvim_buf_clear_namespace(float.buf, input_ns, 0, -1)
-	vim.wo[float.id].cursorline = true
+	vim.wo[float.id].cursorline = #s.actions > 0
 	for i, entry in ipairs(s.actions) do
 		local range = ranges[i]
 		mark(
@@ -295,6 +340,9 @@ function M.menu(s, config)
 end
 
 function M.select(s)
+	if #s.actions == 0 then
+		return
+	end
 	local float = s.action
 	api.nvim_win_set_cursor(float.id, { s.selected, 0 })
 	if float.selection_group then
@@ -314,31 +362,83 @@ function M.select(s)
 		return
 	end
 	for i, label in ipairs(s.labels) do
-		if label:sub(1, #s.input) == s.input then
-			-- ponytail: clipped titles and collision suffixes may lack a glyph; Tab/Enter still select.
-			local start = 1
-			for char in s.input:gmatch(".") do
-				local position = float.titles[i]:find(char, start, true)
-				if not position then
-					break
-				end
+		local title = s.actions[i].action.title:lower()
+		local positions = shortcut.positions(label, s.input, title, s.config.shortcut.mode, s.label_positions[i])
+		for _, position in ipairs(positions or {}) do
+			-- ponytail: synthetic suffixes have no glyph; only mark visible title characters.
+			if float.titles[i]:sub(position, position) == title:sub(position, position) then
 				api.nvim_buf_set_extmark(float.buf, input_ns, i - 1, position, {
 					end_col = position + 1,
 					hl_group = "BlinkCmpLabelMatch",
 					priority = 20000,
 				})
-				start = position + 1
 			end
 		end
 	end
 end
 
+local function preview_lines(lines)
+	local headers, paths, counts = {}, {}, {}
+	local old_left, new_left = 0, 0
+	for i, line in ipairs(lines) do
+		local old_start, old_count, new_start, new_count = line:match("^@@ %-(%d+),?(%d*) %+(%d+),?(%d*) @@")
+		if old_start then
+			old_left, new_left = tonumber(old_count) or 1, tonumber(new_count) or 1
+		elseif old_left > 0 or new_left > 0 then
+			local prefix = line:sub(1, 1)
+			old_left = old_left - ((prefix == " " or prefix == "-") and 1 or 0)
+			new_left = new_left - ((prefix == " " or prefix == "+") and 1 or 0)
+		else
+			local old = line:match("^--- (.+)$")
+			local new = (lines[i + 1] or ""):match("^%+%+%+ (.+)$")
+			if old and new then
+				old, new = old:gsub("\\", "/"), new:gsub("\\", "/")
+				if (old:sub(1, 2) == "a/" or old == "/dev/null") and (new:sub(1, 2) == "b/" or new == "/dev/null") then
+					old, new = old:gsub("^a/", ""), new:gsub("^b/", "")
+				end
+				headers[i], headers[i + 1] = old, new
+				for _, path in ipairs({ old, new }) do
+					if path ~= "/dev/null" then
+						paths[path] = vim.split(path, "/", { plain = true })
+					end
+				end
+			end
+		end
+	end
+	if not next(headers) then
+		return lines
+	end
+	for _, parts in pairs(paths) do
+		for start = #parts, 1, -1 do
+			local suffix = table.concat(parts, "/", start)
+			counts[suffix] = (counts[suffix] or 0) + 1
+		end
+	end
+	local short = { ["/dev/null"] = "/dev/null" }
+	for path, parts in pairs(paths) do
+		for start = #parts, 1, -1 do
+			local suffix = table.concat(parts, "/", start)
+			short[path] = suffix
+			if counts[suffix] == 1 then
+				break
+			end
+		end
+	end
+	local result = vim.list_extend({}, lines)
+	for row, path in pairs(headers) do
+		result[row] = lines[row]:sub(1, 4) .. short[path]
+	end
+	return result
+end
+
 function M.preview(s, lines, config)
 	s.preview_options = s.preview_options or style("preview", config.ui.preview)
 	local options, anchor = s.preview_options, s.geometry
-	if s.preview and s.preview.lines == lines and s.preview.anchor == anchor then
+	if s.preview and s.preview.source_lines == lines and s.preview.anchor == anchor then
 		return
 	end
+	local source_lines = lines
+	lines = s.preview and s.preview.source_lines == lines and s.preview.lines or preview_lines(lines)
 	local longest = 1
 	for _, line in ipairs(lines) do
 		longest = math.max(longest, width(line))
@@ -359,6 +459,7 @@ function M.preview(s, lines, config)
 	local row = math.max(0, math.min(anchor.row, vim.o.lines - vim.o.cmdheight - 1 - height - vertical))
 	local float, changed =
 		show(s, "preview", lines, options, { row = row, col = col, width = preview_width, height = height })
+	float.source_lines = source_lines
 	float.anchor = anchor
 	float.content_height = api.nvim_win_text_height(float.id, {}).all
 	height =

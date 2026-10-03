@@ -173,18 +173,28 @@ function M.apply()
 end
 
 local function typed(s, char)
-	if s.config.shortcut.mode == "off" or not char:match("^%g$") then
+	if char == "<Space>" then
+		char = " "
+	end
+	if #s.actions == 0 or s.config.shortcut.mode == "off" or not char:match("^[%g ]$") then
+		return
+	end
+	if char == " " and s.input == "" then
 		return
 	end
 	s.input = s.input .. char:lower()
-	local first, count = shortcut.match(s.labels, s.input)
+	local mode = s.config.shortcut.mode
+	local first, count = shortcut.match(s.labels, s.input, s.actions, mode, s.label_positions)
 	if count == 0 then
-		s.input = ""
 		render(s)
 	elseif count == 1 then
 		s.selected = first
 		confirm(s)
-	elseif s.labels[s.selected]:sub(1, #s.input) ~= s.input then
+	elseif
+		not shortcut.positions(
+			s.labels[s.selected], s.input, s.actions[s.selected].action.title, mode, s.label_positions[s.selected]
+		)
+	then
 		select(s, first)
 	else
 		render(s)
@@ -220,8 +230,19 @@ local function enter(s)
 			end,
 		},
 	}
+	if not s.config.keymap["<Space>"] then
+		mappings[#mappings + 1] = { lhs = "<Space>", action = mappings[1].action }
+	end
 	for lhs, action in pairs(s.config.keymap) do
-		mappings[#mappings + 1] = { lhs = lhs, action = handlers[action] }
+		local handler, close = handlers[action], action == "close"
+		mappings[#mappings + 1] = {
+			lhs = lhs,
+			action = function()
+				if #s.actions > 0 or close then
+					handler()
+				end
+			end,
+		}
 	end
 	runtime = require("nvim-submode.runtime").create({
 		id = "sub-action",
@@ -229,6 +250,10 @@ local function enter(s)
 		color = s.config.color or nil,
 		options = { count = false, interrupt = "" },
 		on_leave = function()
+			if s.restore_lualine then
+				s.restore_lualine()
+				s.restore_lualine = nil
+			end
 			if current == s and not s.applying then
 				vim.schedule(function()
 					if current == s then
@@ -240,8 +265,8 @@ local function enter(s)
 		mappings = mappings,
 	})
 	runtime:start()
+	s.restore_lualine = require("sub_action.lualine").enter(s.config.color)
 	ui.menu(s, s.config)
-	preview(s)
 end
 
 function M.open(config)
@@ -274,13 +299,16 @@ function M.open(config)
 	api.nvim_create_autocmd({ "VimResized", "ColorScheme" }, {
 		group = events,
 		callback = function()
-			if valid(s) and #s.actions > 0 then
+			if valid(s) then
 				ui.menu(s, config)
-				s.preview_entry = nil
-				preview(s)
+				if #s.actions > 0 then
+					s.preview_entry = nil
+					preview(s)
+				end
 			end
 		end,
 	})
+	enter(s)
 	s.cancel = lsp.request(s, function(entries)
 		if not valid(s) then
 			if current == s then
@@ -296,8 +324,9 @@ function M.open(config)
 		if config.ranking.frequency then
 			require("sub_action.ranking").sort(entries, s.filetype)
 		end
-		s.actions, s.labels = entries, shortcut.labels(entries, config.shortcut.mode)
-		enter(s)
+		s.actions, s.labels, s.label_positions = entries, shortcut.labels(entries, config.shortcut.mode)
+		ui.menu(s, config)
+		preview(s)
 	end)
 end
 

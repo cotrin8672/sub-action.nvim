@@ -229,9 +229,66 @@ local function run()
 		vim.api.nvim_buf_delete(unicode, { force = true })
 	end)
 
+	check("preview headers shorten paths, distinguish moves and duplicate names, and preserve diff content and cache", function()
+		local ui = require("sub_action.ui")
+		local config = { ui = { preview = { max_width = 70, max_height = 15, border = "none", scrollbar = true, winhighlight = "Normal:NormalFloat" } } }
+		local function draw(lines, expected)
+			local original_lines = vim.deepcopy(lines)
+			local s = { geometry = { row = 0, col = 0, width = 1, height = 1 } }
+			ui.preview(s, lines, config)
+			equal(vim.api.nvim_buf_get_lines(s.preview.buf, 0, -1, false), expected)
+			equal(lines, original_lines)
+			local tick = vim.api.nvim_buf_get_changedtick(s.preview.buf)
+			ui.preview(s, lines, config)
+			s.geometry = vim.deepcopy(s.geometry)
+			ui.preview(s, lines, config)
+			equal(vim.api.nvim_buf_get_changedtick(s.preview.buf), tick)
+			ui.close(s)
+		end
+		local native = bridge.preview(edit, "utf-16")
+		local expected = vim.deepcopy(native)
+		local filename = vim.fs.basename(vim.uri_to_fname(uri))
+		expected[1], expected[2] = "--- " .. filename, "+++ " .. filename
+		draw(native, expected)
+		for _, case in ipairs({
+			{ "src/main/kotlin/drill/Actor.kt", "src/main/kotlin/drill/Actor.kt", "Actor.kt", "Actor.kt" },
+			{ "src/drill/Example.kt", "src/machine/Example.kt", "drill/Example.kt", "machine/Example.kt" },
+			{ "old/a/shared/Example.kt", "new/b/shared/Example.kt", "a/shared/Example.kt", "b/shared/Example.kt" },
+			{ "C:\\src\\drill\\File name.kt", "C:\\src\\machine\\File name.kt", "drill/File name.kt", "machine/File name.kt" },
+			{ "a/src/Actor.kt", "b/src/Actor.kt", "Actor.kt", "Actor.kt" },
+			{ "/dev/null", "b/src/New.kt", "/dev/null", "New.kt" },
+			{ "a/src/Old.kt", "/dev/null", "Old.kt", "/dev/null" },
+			{ "src/Old.kt", "src/New.kt", "Old.kt", "New.kt" },
+			{ "/src/Actor.kt", "src/Actor.kt", "/src/Actor.kt", "src/Actor.kt" },
+		}) do
+			draw(
+				{ "--- " .. case[1], "+++ " .. case[2], "@@ -1 +1 @@", "-before", "+after" },
+				{ "--- " .. case[3], "+++ " .. case[4], "@@ -1 +1 @@", "-before", "+after" }
+			)
+		end
+		draw({
+			"--- src/drill/Example.kt", "+++ src/drill/Example.kt", "@@ -1,0 +1 @@", "+new",
+			"--- src/machine/Example.kt", "+++ src/machine/Example.kt", "@@ -1 +1,0 @@", "-old",
+		}, {
+			"--- drill/Example.kt", "+++ drill/Example.kt", "@@ -1,0 +1 @@", "+new",
+			"--- machine/Example.kt", "+++ machine/Example.kt", "@@ -1 +1,0 @@", "-old",
+		})
+		draw({
+			"--- src/Body.kt", "+++ src/Body.kt", "@@ -1,2 +1,2 @@",
+			"--- content/Removed.kt", "+++ content/Added.kt", " context",
+		}, {
+			"--- Body.kt", "+++ Body.kt", "@@ -1,2 +1,2 @@",
+			"--- content/Removed.kt", "+++ content/Added.kt", " context",
+		})
+		draw({ "Preview unavailable" }, { "Preview unavailable" })
+	end)
+
 	local servers = {}
 	local function server(name, encoding)
-		local state = { actions = {}, requests = {}, commands = {}, resolvers = {}, cancelled = {}, sequence = 0 }
+		local state = {
+			actions = {}, requests = {}, commands = {}, resolvers = {}, cancelled = {}, sequence = 0,
+			action_waiters = {},
+		}
 		servers[#servers + 1] = state
 		state.id = vim.lsp.start({
 			name = name,
@@ -242,7 +299,9 @@ local function run()
 						state.sequence = state.sequence + 1
 						state.requests[#state.requests + 1] = { method = method, params = vim.deepcopy(params) }
 						local id = state.sequence
-						if method == "codeAction/resolve" and params.data == "defer" then
+						if method == "textDocument/codeAction" and state.defer_actions then
+							state.action_waiters[#state.action_waiters + 1] = callback
+						elseif method == "codeAction/resolve" and params.data == "defer" then
 							state.resolvers[#state.resolvers + 1] = callback
 						else
 							vim.schedule(function()
@@ -305,7 +364,8 @@ local function run()
 		vim.cmd.redraw()
 		plugin.open(options)
 		wait(function()
-			return floats().menu ~= nil
+			local menu = floats().menu
+			return menu and vim.wo[menu].cursorline
 		end)
 		equal(vim.api.nvim_get_current_buf(), source)
 	end
@@ -319,6 +379,84 @@ local function run()
 		command("Implement members"),
 	}
 	two.actions = { command("Import Foo") }
+
+	check("slow servers show an animated spinner immediately; replies and Escape stop it", function()
+		local previous_one, previous_two, previous_commands = one.actions, two.actions, one.commands
+		one.actions, two.actions = { command("Deferred action") }, {}
+		one.commands = {}
+		one.defer_actions, two.defer_actions = true, true
+		setup({ ui = { action = { max_width = 37, max_height = 5 } } })
+		local commands = #one.commands
+		local changedtick = vim.api.nvim_buf_get_changedtick(source)
+		plugin.open()
+		local menu = assert(floats().menu, "Loading must appear before any LSP reply")
+		equal(vim.api.nvim_win_get_width(menu), 37)
+		equal(vim.api.nvim_win_get_height(menu), 5)
+		local function spinner()
+			local buffer = vim.api.nvim_win_get_buf(menu)
+			for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(
+				buffer, vim.api.nvim_create_namespace("sub-action"), 0, -1, { details = true }
+			)) do
+				local details = mark[4]
+				if details.virt_text then
+					local glyph = details.virt_text[1][1]
+					equal(mark[2], math.floor((vim.api.nvim_win_get_height(menu) - 1) / 2))
+					equal(details.virt_text_win_col, math.floor((vim.api.nvim_win_get_width(menu) - vim.fn.strdisplaywidth(glyph)) / 2))
+					return glyph
+				end
+			end
+		end
+		assert(text(menu):match("^%s*$"))
+		local first_frame = assert(spinner())
+		wait(function() return spinner() ~= first_frame end)
+		equal(require("nvim-submode").get_submode_name(), "CODE ACTION")
+		equal(floats().preview, nil)
+		key("<Tab><S-Tab><CR><BS>d")
+		equal(#one.commands, commands)
+		equal(vim.api.nvim_buf_get_changedtick(source), changedtick)
+		assert(text(menu):match("^%s*$"))
+		assert(spinner())
+		one.action_waiters[1](nil, vim.deepcopy(one.actions))
+		vim.wait(20, function() return false end, 5)
+		assert(text(menu):match("^%s*$"))
+		assert(spinner(), "Wait for all clients before assigning shortcuts")
+		two.action_waiters[1](nil, {})
+		wait(function() return text(menu):find("Deferred action", 1, true) ~= nil end)
+		equal(floats().menu, menu)
+		vim.wait(120, function() return false end, 5)
+		equal(spinner(), nil)
+		key("<CR>")
+		equal(#one.commands, commands + 1)
+		equal(floats(), {})
+
+		setup({ ui = { action = { max_width = 1000, max_height = 1000, border = "rounded" } } })
+		plugin.open()
+		menu = assert(floats().menu)
+		equal(vim.api.nvim_win_get_width(menu), vim.o.columns - 2)
+		equal(vim.api.nvim_win_get_height(menu), vim.o.lines - vim.o.cmdheight - 3)
+		assert(spinner())
+		local columns, rows = vim.o.columns, vim.o.lines
+		vim.o.columns, vim.o.lines = 30, 12
+		vim.api.nvim_exec_autocmds("VimResized", {})
+		equal(floats().menu, menu)
+		equal(vim.api.nvim_win_get_width(menu), 28)
+		equal(vim.api.nvim_win_get_height(menu), vim.o.lines - vim.o.cmdheight - 3)
+		assert(spinner())
+		local cancelled = #one.cancelled
+		key("<Esc>")
+		vim.o.columns, vim.o.lines = columns, rows
+		equal(floats(), {})
+		equal(require("nvim-submode").get_submode_name(), nil)
+		assert(#one.cancelled > cancelled)
+		one.action_waiters[2](nil, vim.deepcopy(one.actions))
+		two.action_waiters[2](nil, {})
+		vim.wait(120, function() return false end, 5)
+		equal(floats(), {})
+		equal(#one.commands, commands + 1)
+		one.defer_actions, two.defer_actions = false, false
+		one.actions, two.actions, one.commands = previous_one, previous_two, previous_commands
+		setup()
+	end)
 
 	check("multiple clients, non-focusable Blink-shaped floats, Tab and Escape", function()
 		local origin = vim.api.nvim_get_current_win()
@@ -403,6 +541,59 @@ local function run()
 		assert(text(floats().menu):find("rust_analyzer", 1, true))
 		key("<Esc>")
 		one.actions, two.actions = previous, other
+		setup()
+	end)
+
+	check("full title prefixes and spaced shortcuts retain input and highlight the corresponding title letters", function()
+		local previous, other, previous_commands = one.actions, two.actions, one.commands
+		one.actions, two.actions, one.commands = {
+			command("Import Foo"), command("Import Bar"),
+		}, {}, {}
+		local namespace = vim.api.nvim_create_namespace("sub-action.input")
+		local function positions()
+			local buffer = vim.api.nvim_win_get_buf(assert(floats().menu))
+			return vim.tbl_map(function(mark) return { mark[2], mark[3] } end,
+				vim.api.nvim_buf_get_extmarks(buffer, namespace, 0, -1, {}))
+		end
+		open()
+		key("im")
+		equal(positions(), { { 0, 1 }, { 0, 2 }, { 1, 1 }, { 1, 2 } })
+		equal(#one.commands, 0)
+		key("port ")
+		equal(positions(), {
+			{ 0, 1 }, { 0, 2 }, { 0, 3 }, { 0, 4 }, { 0, 5 }, { 0, 6 },
+			{ 1, 1 }, { 1, 2 }, { 1, 3 }, { 1, 4 }, { 1, 5 }, { 1, 6 },
+		})
+		key("b")
+		equal(one.commands[1].arguments, { "Import Bar" })
+		equal(floats(), {})
+		open()
+		key("i b")
+		equal(one.commands[2].arguments, { "Import Bar" })
+		open()
+		key("ib")
+		equal(one.commands[3].arguments, { "Import Bar" })
+		open()
+		key("imx")
+		equal(positions(), {})
+		key("<BS>")
+		equal(positions(), { { 0, 1 }, { 0, 2 }, { 1, 1 }, { 1, 2 } })
+		key("port f")
+		equal(one.commands[4].arguments, { "Import Foo" })
+
+		one.actions = { command("Initialize Instance Foo"), command("Initialize Instance Bar") }
+		open()
+		key("ii")
+		equal(positions(), { { 0, 1 }, { 0, 12 }, { 1, 1 }, { 1, 12 } })
+		key("<BS>")
+		equal(positions(), { { 0, 1 }, { 1, 1 } })
+		key("<Esc>")
+		setup({ ui = { action = { max_width = 8 } } })
+		open()
+		key("ii")
+		equal(positions(), { { 0, 1 }, { 1, 1 } }, "Clipped matches must not highlight the ellipsis or padding")
+		key("<Esc>")
+		one.actions, two.actions, one.commands = previous, other, previous_commands
 		setup()
 	end)
 
@@ -653,11 +844,11 @@ local function run()
 		local tick = vim.api.nvim_buf_get_changedtick(vim.api.nvim_win_get_buf(window))
 		key("<Tab><S-Tab>")
 		equal(preview_calls, 1)
-		equal(menu_calls, 1)
+		equal(menu_calls, 2)
 		equal(vim.api.nvim_buf_get_changedtick(vim.api.nvim_win_get_buf(window)), tick)
 		key(string.rep("<Tab>", 101) .. string.rep("<S-Tab>", 100))
 		equal(vim.api.nvim_win_get_cursor(window)[1], 2)
-		equal(menu_calls, 1)
+		equal(menu_calls, 2)
 		local commands, tabs = #one.commands, tab_count
 		key("<CR><Tab>")
 		equal(tab_count, tabs + 1)
