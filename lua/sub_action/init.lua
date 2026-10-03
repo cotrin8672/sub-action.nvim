@@ -7,7 +7,7 @@ local defaults = {
 		["<S-Tab>"] = "prev",
 		["<CR>"] = "apply",
 		["<BS>"] = "backspace",
-		["<C-c>"] = "close",
+		["<Esc>"] = "close",
 	},
 	ui = {
 		action = {
@@ -99,7 +99,7 @@ function M.setup(opts)
 	for lhs, action in pairs(next_config.keymap) do
 		assert(type(lhs) == "string" and lhs ~= "" and not lhs:find("<any>", 1, true), "invalid keymap key")
 		local key = vim.fn.keytrans(vim.api.nvim_replace_termcodes(lhs, true, false, true))
-		assert(key ~= "<Esc>", "Esc is the fixed submode cancel key")
+		assert(key ~= "<Esc>" or action == "close", "Esc can only be mapped to close")
 		assert(
 			action == false or vim.tbl_contains({ "next", "prev", "apply", "backspace", "close" }, action),
 			"invalid keymap action for " .. lhs

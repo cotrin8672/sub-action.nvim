@@ -80,6 +80,8 @@ local function run()
 		fresh.open()
 		equal(captured.ranking.frequency, false)
 		equal(captured.color, "#E3A875")
+		equal(captured.keymap["<Esc>"], "close")
+		equal(captured.keymap["<C-c>"], nil)
 		fresh.open({ shortcut = { mode = "off" } })
 		equal(captured.shortcut.mode, "off")
 		equal(captured.color, "#E3A875")
@@ -113,6 +115,7 @@ local function run()
 			{ client = { icons = { rust_analyzer = false } } },
 			{ keymap = { ["<Tab>"] = "typo" } },
 			{ keymap = { ["<Esc>"] = "next" } },
+			{ keymap = { ["<Esc>"] = false } },
 			{ keymap = { ["<C-i>"] = "next" } },
 			{ keymap = { ["<any>"] = "apply" } },
 		}) do
@@ -449,7 +452,6 @@ local function run()
 					["<S-Tab>"] = false,
 					["<CR>"] = false,
 					["<BS>"] = false,
-					["<C-c>"] = false,
 					["<C-n>"] = "next",
 					["<C-p>"] = "prev",
 					["<C-y>"] = "apply",
@@ -478,9 +480,11 @@ local function run()
 			assert(text(floats().menu):match("^%s+a%s+Alpha"))
 			key("q")
 			equal(floats(), {})
-			setup()
+			setup({ keymap = { ["<Esc>"] = "close" } })
 			open()
 			key("<C-c>")
+			assert(floats().menu)
+			key("<Esc>")
 			equal(floats(), {})
 			assert(not package.loaded["sub_action.ranking"])
 			equal(vim.fn.filereadable(vim.fn.stdpath("state") .. "/sub-action.json"), 0)

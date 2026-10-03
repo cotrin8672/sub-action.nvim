@@ -41,14 +41,15 @@ The plugin registers no Normal-mode mappings. Without lazy.nvim, use
 | `gra` (configured above) | Open code actions |
 | `Tab` / `Shift-Tab` | Next / previous action |
 | `Enter` | Apply and leave the submode |
-| `Esc` / `Ctrl-C` | Cancel |
+| `Esc` | Cancel |
 | Characters / `Backspace` | Build / shorten a shortcut |
 
 Shortcuts apply as soon as they become unique: `Import Foo`, `Import Bar`, and
 `Implement members` become `if`, `ib`, and `im`. Ordinary mappings resume on exit.
 Moving or editing the source, switching windows, or leaving Normal mode cancels.
-`Esc` is nvim-submode's fixed cancel key. Other bindings belong to `keymap` below;
-disabled and unmapped keys are ignored inside the submode.
+Bindings belong to `keymap` below. `Esc` can only map to `close` and cannot be
+disabled because nvim-submode always handles it as cancel. Other disabled and
+unmapped keys are ignored inside the submode.
 
 ## Configuration
 
@@ -63,7 +64,7 @@ require("sub_action").setup({
     ["<S-Tab>"] = "prev",
     ["<CR>"] = "apply",
     ["<BS>"] = "backspace",
-    ["<C-c>"] = "close",
+    ["<Esc>"] = "close",
   },
   ui = {
     action = { max_width = 50, max_height = 8, border = "none", winblend = 0, scrollbar = true },
