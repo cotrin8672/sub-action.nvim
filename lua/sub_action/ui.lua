@@ -28,27 +28,20 @@ api.nvim_create_autocmd("ColorScheme", { callback = highlights })
 
 local function style(kind, options)
 	local border = options.border
-	if border == false then
-		if vim.o.winborder ~= "" then
-			border = vim.opt.winborder:get()
-			border = #border == 1 and border[1] or border
-		else
-			border = kind == "action" and "none" or "padded"
-		end
+	if border == nil then
+		local global = vim.opt.winborder:get()
+		border = #global > 1 and global or global[1] or (kind == "action" and "none" or "padded")
 	end
 	return {
 		border = border,
-		winblend = options.winblend == false and vim.go.winblend or options.winblend,
+		winblend = options.winblend or vim.go.winblend,
 		winhighlight = options.winhighlight,
 		min_width = kind == "action" and 15 or 1,
 		max_height = options.max_height,
 		max_width = options.max_width,
 		scrolloff = kind == "action" and 2 or 0,
 		scrollbar = options.scrollbar,
-		padding = 1,
-		gap = 1,
 		wrap = kind == "preview",
-		linebreak = kind == "preview",
 		filetype = kind == "action" and "sub-action" or "diff",
 	}
 end
@@ -145,7 +138,7 @@ local function show(s, kind, lines, options, geometry)
 		vim.wo[float.id].winblend = options.winblend
 		vim.wo[float.id].winhighlight = options.winhighlight
 		vim.wo[float.id].wrap = options.wrap
-		vim.wo[float.id].linebreak = options.linebreak
+		vim.wo[float.id].linebreak = options.wrap
 		vim.wo[float.id].scrolloff = options.scrolloff
 		vim.wo[float.id].cursorlineopt = "line"
 		vim.wo[float.id].foldenable = false
@@ -234,8 +227,7 @@ end
 
 function M.menu(s, config)
 	local options = s.menu_options or style("action", config.ui.action)
-	local padding = type(options.padding) == "table" and options.padding or { options.padding, options.padding }
-	s.menu_options, s.label_start, s.marked_input = options, padding[1], nil
+	s.menu_options, s.label_start, s.marked_input = options, 1, nil
 	local names, titles, label_width, name_width, title_width = {}, {}, 0, 0, 0
 	for i, entry in ipairs(s.actions) do
 		titles[i] = entry.action.title:gsub("[\r\n\t]", " ")
@@ -247,32 +239,26 @@ function M.menu(s, config)
 			math.max(name_width, width(names[i])),
 			math.max(title_width, width(titles[i]))
 	end
-	local gap = string.rep(" ", options.gap)
-	local prefix_size = padding[1] + label_width + (label_width > 0 and options.gap or 0)
-	local longest = prefix_size + title_width + (name_width > 0 and options.gap + name_width or 0) + padding[2]
+	local prefix_size = label_width + (label_width > 0 and 2 or 1)
+	local longest = prefix_size + title_width + (name_width > 0 and 1 + name_width or 0) + 1
 	local menu_width, height, horizontal, vertical = dimensions({ string.rep(" ", longest) }, options)
 	height = math.min(#s.actions, config.ui.action.max_height, vim.o.lines - vim.o.cmdheight - 1 - vertical)
 	height = math.max(1, height)
 	-- Keep the action readable when a client name is unusually long.
 	local minimum_title = math.min(title_width, math.max(1, math.floor((menu_width - prefix_size) / 2)))
-	name_width = math.min(name_width, math.max(0, menu_width - prefix_size - padding[2] - options.gap - minimum_title))
-	local title_space =
-		math.max(0, menu_width - prefix_size - padding[2] - (name_width > 0 and options.gap + name_width or 0))
+	name_width = math.min(name_width, math.max(0, menu_width - prefix_size - 2 - minimum_title))
+	local title_space = math.max(0, menu_width - prefix_size - 1 - (name_width > 0 and 1 + name_width or 0))
 	local lines, ranges = {}, {}
 	for i, entry in ipairs(s.actions) do
 		local label, title, name = s.labels[i], clip(titles[i], title_space), clip(names[i], name_width)
-		local line = string.rep(" ", padding[1])
-			.. label
-			.. string.rep(" ", label_width - width(label))
-			.. (label_width > 0 and gap or "")
+		local line = " " .. label .. string.rep(" ", label_width - width(label)) .. (label_width > 0 and " " or "")
 		local start = #line
 		line = line .. title .. string.rep(" ", title_space - width(title))
-		local source_start = #line + #gap
+		local source_start = #line + 1
 		if name_width > 0 then
-			line = line .. gap .. name .. string.rep(" ", name_width - width(name))
+			line = line .. " " .. name .. string.rep(" ", name_width - width(name))
 		end
-		lines[i], ranges[i] =
-			line .. string.rep(" ", padding[2]), { start, start + #title, source_start, source_start + #name }
+		lines[i], ranges[i] = line .. " ", { start, start + #title, source_start, source_start + #name }
 	end
 	local position = vim.fn.screenpos(s.winid, s.cursor[1], s.cursor[2] + 1)
 	local cursor_row, cursor_col = math.max(0, position.row - 1), math.max(0, position.col - 1)
@@ -289,7 +275,7 @@ function M.menu(s, config)
 	vim.wo[float.id].cursorline = true
 	for i, entry in ipairs(s.actions) do
 		local range = ranges[i]
-		mark(float.buf, i - 1, padding[1], padding[1] + #s.labels[i], "BlinkCmpKind")
+		mark(float.buf, i - 1, 1, 1 + #s.labels[i], "BlinkCmpKind")
 		mark(
 			float.buf,
 			i - 1,

@@ -40,7 +40,7 @@ function M.request(s, callback)
 	end)
 end
 
-function M.resolve(entry, bufnr, callback, for_apply)
+function M.resolve(entry, bufnr, callback)
 	local action, client = entry.action, entry.client
 	if entry.resolved then
 		callback(entry.resolved, entry.resolve_error)
@@ -48,7 +48,7 @@ function M.resolve(entry, bufnr, callback, for_apply)
 	end
 	if
 		type(action.command) == "string"
-		or (action.edit and (not for_apply or action.command))
+		or (action.edit and action.command)
 		or not client:supports_method("codeAction/resolve", bufnr)
 		or action.disabled
 	then

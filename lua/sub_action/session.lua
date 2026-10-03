@@ -83,7 +83,7 @@ local function preview(s)
 			return
 		end
 		draw(action, err)
-	end, true)
+	end)
 	if not finished and not entry.preview then
 		ui.preview(s, loading, s.config)
 	end
@@ -155,7 +155,7 @@ function M.apply()
 				require("sub_action.ranking").record(entry.action, s.filetype, entry.frequency_key)
 			end
 		end)
-	end, true)
+	end)
 end
 
 local function typed(s, char)

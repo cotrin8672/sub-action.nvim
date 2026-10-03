@@ -77,7 +77,7 @@ only the shortcut: `open({ shortcut = { mode = "mnemonic" } })`.
 
 Window `winhighlight` uses `BlinkCmpMenu`, `BlinkCmpMenuBorder`, and
 `BlinkCmpMenuSelection` for actions; `BlinkCmpDoc` and `BlinkCmpDocBorder` for
-previews. These theme groups fall back to native highlights. Omitted or `false`
+previews. These theme groups fall back to native highlights. Omitted
 `border` and `winblend` inherit Neovim's global `winborder` and `winblend` when
 opened; explicit values override them. An empty `winborder` uses Blink's defaults:
 `none` for actions, `padded` for previews. Missing client icons are omitted.

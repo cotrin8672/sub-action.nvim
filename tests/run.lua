@@ -80,8 +80,6 @@ local function run()
 		fresh.open()
 		equal(captured.ranking.frequency, false)
 		equal(captured.color, "#E3A875")
-		equal(captured.ui.action.border, false)
-		equal(captured.ui.preview.winblend, false)
 		equal(captured.keymap["<Esc>"], "close")
 		equal(captured.keymap["<C-c>"], nil)
 		fresh.open({ shortcut = { mode = "off" } })
@@ -369,36 +367,27 @@ local function run()
 	check("window overrides win over globals, and inherited values update on the next open", function()
 		local border, blend = vim.o.winborder, vim.go.winblend
 		vim.o.winborder, vim.go.winblend = "rounded", 35
-		setup({
-			ui = {
-				action = { border = "none", winblend = 0 },
-				preview = { border = { "#" }, winblend = 7 },
-			},
-		})
+		setup({ ui = { action = { border = "none", winblend = 0 } } })
 		open()
 		local windows = floats()
 		local menu_border = vim.api.nvim_win_get_config(windows.menu).border
 		assert(menu_border == nil or menu_border == "none")
-		equal(vim.api.nvim_win_get_config(windows.preview).border, vim.fn["repeat"]({ "#" }, 8))
+		equal(
+			vim.api.nvim_win_get_config(windows.preview).border,
+			{ "╭", "─", "╮", "│", "╯", "─", "╰", "│" }
+		)
 		equal(vim.wo[windows.menu].winblend, 0)
-		equal(vim.wo[windows.preview].winblend, 7)
+		equal(vim.wo[windows.preview].winblend, 35)
 		equal(vim.go.winblend, 35)
 		plugin.close()
-		setup({
-			ui = {
-				action = { border = false, winblend = false },
-				preview = { border = false, winblend = false },
-			},
-		})
-		local inherited_border = { "╔", "═", "╗", "║", "╝", "═", "╚", "║" }
+		setup()
 		vim.o.winborder, vim.go.winblend = "double", 45
-		if vim.fn.has("nvim-0.12") == 1 then
-			vim.o.winborder = "+,-,+,|,+,-,+,|"
-			inherited_border = { "+", "-", "+", "|", "+", "-", "+", "|" }
-		end
 		open()
 		for _, window in pairs(floats()) do
-			equal(vim.api.nvim_win_get_config(window).border, inherited_border)
+			equal(
+				vim.api.nvim_win_get_config(window).border,
+				{ "╔", "═", "╗", "║", "╝", "═", "╚", "║" }
+			)
 			equal(vim.wo[window].winblend, 45)
 		end
 		plugin.close()

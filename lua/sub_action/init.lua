@@ -13,16 +13,12 @@ local defaults = {
 		action = {
 			max_width = 50,
 			max_height = 8,
-			border = false,
-			winblend = false,
 			scrollbar = true,
 			winhighlight = "Normal:BlinkCmpMenu,FloatBorder:BlinkCmpMenuBorder,CursorLine:BlinkCmpMenuSelection,Search:None,CurSearch:None",
 		},
 		preview = {
 			max_width = 70,
 			max_height = 15,
-			border = false,
-			winblend = false,
 			scrollbar = true,
 			winhighlight = "Normal:BlinkCmpDoc,FloatBorder:BlinkCmpDocBorder,EndOfBuffer:BlinkCmpDoc",
 		},
@@ -36,14 +32,14 @@ local function check_options(opts, template, path)
 	assert(type(opts) == "table", path .. " must be a table")
 	for name, value in pairs(opts) do
 		local default = template[name]
+		if default == nil and template.max_width then
+			default = name == "border" and "" or name == "winblend" and 0 or nil
+		end
 		local field = path .. "." .. tostring(name)
 		assert(default ~= nil, "unknown option: " .. field)
 		local kind = type(value)
 		assert(
-			kind == type(default)
-				or (name == "border" and (kind == "string" or kind == "table"))
-				or (name == "winblend" and kind == "number")
-				or (name == "color" and value == false),
+			kind == type(default) or (name == "border" and kind == "table") or (name == "color" and value == false),
 			field .. " has an invalid type"
 		)
 		if kind == "table" and name ~= "keymap" and name ~= "icons" and name ~= "border" then
@@ -87,7 +83,6 @@ function M.setup(opts)
 		return
 	end
 	local next_config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts)
-	assert(vim.fn.has("nvim-0.11") == 1, "sub-action requires Neovim 0.11+")
 	check_shortcut(next_config.shortcut)
 	assert(vim.tbl_contains({ "name", "icon", "none" }, next_config.client.display), "invalid client display")
 	for name, icon in pairs(next_config.client.icons) do
@@ -120,27 +115,16 @@ function M.setup(opts)
 				dimension .. " must be a positive integer"
 			)
 		end
-		assert(
-			window.winblend == false
-				or (
-					type(window.winblend) == "number"
-					and window.winblend >= 0
-					and window.winblend <= 100
-					and window.winblend % 1 == 0
-				),
-			"invalid winblend"
-		)
+		local blend = window.winblend or 0
+		assert(blend >= 0 and blend <= 100 and blend % 1 == 0, "invalid winblend")
 		local border = window.border
 		if type(border) == "string" then
 			assert(
 				vim.tbl_contains({ "none", "single", "double", "rounded", "solid", "shadow", "padded" }, border),
 				"invalid border"
 			)
-		elseif border ~= false then
-			assert(
-				type(border) == "table" and vim.tbl_contains({ 1, 2, 4, 8 }, #border),
-				"border must have 1, 2, 4, or 8 entries"
-			)
+		elseif border then
+			assert(vim.tbl_contains({ 1, 2, 4, 8 }, #border), "border must have 1, 2, 4, or 8 entries")
 			for _, char in ipairs(border) do
 				if type(char) == "table" then
 					assert(#char == 2 and type(char[2]) == "string", "invalid border highlight")
