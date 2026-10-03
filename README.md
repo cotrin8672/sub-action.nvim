@@ -38,7 +38,8 @@ The plugin registers no Normal-mode mappings. Without lazy.nvim, use
 | Characters / `Backspace` | Build / shorten a shortcut |
 
 Shortcuts apply as soon as they become unique: `Import Foo`, `Import Bar`, and
-`Implement members` become `if`, `ib`, and `im`. Ordinary mappings resume on exit.
+`Implement members` become `if`, `ib`, and `im`. Typed characters highlight within
+the title; no shortcut column is shown. Ordinary mappings resume on exit.
 Moving or editing the source, switching windows, or leaving Normal mode cancels.
 Bindings belong to `keymap` below. `Esc` can only map to `close` and cannot be
 disabled because nvim-submode always handles it as cancel. Other disabled and
@@ -64,7 +65,7 @@ require("sub_action").setup({
     preview = { max_width = 70, max_height = 15, scrollbar = true },
   },
   ranking = { frequency = false }, -- enable explicitly to rank and save history
-  client = { display = "name", icons = {} }, -- "name", "icon", "none"
+  client = { display = "auto", icons = {} }, -- "auto", "name", "icon", "none"
 })
 ```
 
@@ -87,6 +88,9 @@ previews. These theme groups fall back to native highlights. Omitted
 `border` and `winblend` inherit Neovim's global `winborder` and `winblend` when
 opened; explicit values override them. An empty `winborder` uses Blink's defaults:
 `none` for actions, `padded` for previews. Missing client icons are omitted.
+`auto` shows client names only when multiple clients return actions.
+Client names use `SubActionClient` (linked to `Comment`); typed matches use
+`BlinkCmpLabelMatch`. Both highlights can be overridden with `nvim_set_hl`.
 The accent is exposed through
 `require("nvim-submode").get_submode_color()` for statuslines and cursor colors.
 

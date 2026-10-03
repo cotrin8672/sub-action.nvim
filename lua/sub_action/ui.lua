@@ -9,10 +9,9 @@ local links = {
 	BlinkCmpMenuBorder = "Pmenu",
 	BlinkCmpMenuSelection = "PmenuSel",
 	BlinkCmpLabel = "Pmenu",
-	BlinkCmpLabelMatch = "Pmenu",
+	BlinkCmpLabelMatch = "Special",
 	BlinkCmpLabelDeprecated = "PmenuExtra",
-	BlinkCmpSource = "PmenuExtra",
-	BlinkCmpKind = "PmenuKind",
+	SubActionClient = "Comment",
 	BlinkCmpDoc = "NormalFloat",
 	BlinkCmpDocBorder = "NormalFloat",
 	BlinkCmpScrollBarThumb = "PmenuThumb",
@@ -222,28 +221,36 @@ end
 function M.menu(s, config)
 	local options = s.menu_options or style("action", config.ui.action)
 	s.menu_options, s.marked_input = options, nil
-	local names, titles, label_width, name_width, title_width = {}, {}, 0, 0, 0
+	local display = config.client.display
+	if display == "auto" then
+		display = "none"
+		local first = s.actions[1].client
+		for _, entry in ipairs(s.actions) do
+			if (entry.client.id or entry.client.name) ~= (first.id or first.name) then
+				display = "name"
+				break
+			end
+		end
+	end
+	local names, titles, name_width, title_width = {}, {}, 0, 0
 	for i, entry in ipairs(s.actions) do
 		titles[i] = entry.action.title:gsub("[\r\n\t]", " ")
-		names[i] = config.client.display == "name" and entry.client.name
-			or config.client.display == "icon" and (config.client.icons[entry.client.name] or "")
+		names[i] = display == "name" and entry.client.name
+			or display == "icon" and (config.client.icons[entry.client.name] or "")
 			or ""
-		label_width, name_width, title_width =
-			math.max(label_width, width(s.labels[i])),
-			math.max(name_width, width(names[i])),
-			math.max(title_width, width(titles[i]))
+		name_width, title_width = math.max(name_width, width(names[i])), math.max(title_width, width(titles[i]))
 	end
-	local prefix_size = label_width + (label_width > 0 and 2 or 1)
-	local longest = prefix_size + title_width + (name_width > 0 and 1 + name_width or 0) + 1
+	local longest = title_width + (name_width > 0 and 1 + name_width or 0) + 2
 	local menu_width, height, horizontal, vertical = dimensions(math.max(15, longest), #s.actions, options)
 	-- Keep the action readable when a client name is unusually long.
-	local minimum_title = math.min(title_width, math.max(1, math.floor((menu_width - prefix_size) / 2)))
-	name_width = math.min(name_width, math.max(0, menu_width - prefix_size - 2 - minimum_title))
-	local title_space = math.max(0, menu_width - prefix_size - 1 - (name_width > 0 and 1 + name_width or 0))
+	local minimum_title = math.min(title_width, math.max(1, math.floor((menu_width - 1) / 2)))
+	name_width = math.min(name_width, math.max(0, menu_width - 3 - minimum_title))
+	local title_space = math.max(0, menu_width - 2 - (name_width > 0 and 1 + name_width or 0))
 	local lines, ranges = {}, {}
 	for i, entry in ipairs(s.actions) do
-		local label, title, name = s.labels[i], clip(titles[i], title_space), clip(names[i], name_width)
-		local line = " " .. label .. string.rep(" ", label_width - width(label)) .. (label_width > 0 and " " or "")
+		local title, name = clip(titles[i], title_space), clip(names[i], name_width)
+		titles[i] = title:lower()
+		local line = " "
 		local start = #line
 		line = line .. title .. string.rep(" ", title_space - width(title))
 		local source_start = #line + 1
@@ -257,17 +264,17 @@ function M.menu(s, config)
 	local rows = vim.o.lines - vim.o.cmdheight - 1
 	local below = cursor_row + 1 + height + vertical <= rows
 	local row = below and cursor_row + 1 or math.max(0, cursor_row - height - vertical)
-	local col = math.max(0, math.min(cursor_col - prefix_size, vim.o.columns - menu_width - horizontal))
+	local col = math.max(0, math.min(cursor_col - 1, vim.o.columns - menu_width - horizontal))
 	local geometry = { row = row, col = col, width = menu_width, height = height }
 	s.geometry = { row = row, col = col, width = menu_width + horizontal, height = height + vertical }
 	local float = show(s, "action", lines, options, geometry)
 	float.content_height = #lines
+	float.titles = titles
 	float.selection = nil
 	api.nvim_buf_clear_namespace(float.buf, input_ns, 0, -1)
 	vim.wo[float.id].cursorline = true
 	for i, entry in ipairs(s.actions) do
 		local range = ranges[i]
-		mark(float.buf, i - 1, 1, 1 + #s.labels[i], "BlinkCmpKind")
 		mark(
 			float.buf,
 			i - 1,
@@ -275,7 +282,7 @@ function M.menu(s, config)
 			range[2],
 			entry.action.disabled and "BlinkCmpLabelDeprecated" or "BlinkCmpLabel"
 		)
-		mark(float.buf, i - 1, range[3], range[4], "BlinkCmpSource")
+		mark(float.buf, i - 1, range[3], range[4], "SubActionClient")
 	end
 	local group = options.winhighlight:match("CursorLine:([^,]+)") or "CursorLine"
 	local background = api.nvim_get_hl(0, { name = group, link = false }).bg
@@ -308,11 +315,20 @@ function M.select(s)
 	end
 	for i, label in ipairs(s.labels) do
 		if label:sub(1, #s.input) == s.input then
-			api.nvim_buf_set_extmark(float.buf, input_ns, i - 1, 1, {
-				end_col = 1 + #s.input,
-				hl_group = "BlinkCmpLabelMatch",
-				priority = 20000,
-			})
+			-- ponytail: clipped titles and collision suffixes may lack a glyph; Tab/Enter still select.
+			local start = 1
+			for char in s.input:gmatch(".") do
+				local position = float.titles[i]:find(char, start, true)
+				if not position then
+					break
+				end
+				api.nvim_buf_set_extmark(float.buf, input_ns, i - 1, position, {
+					end_col = position + 1,
+					hl_group = "BlinkCmpLabelMatch",
+					priority = 20000,
+				})
+				start = position + 1
+			end
 		end
 	end
 end

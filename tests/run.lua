@@ -329,6 +329,16 @@ local function run()
 		local windows = floats()
 		equal(require("nvim-submode").get_submode_color(), "#E3A875")
 		assert(text(windows.menu):find("rust_analyzer", 1, true) and text(windows.menu):find("other", 1, true))
+		local marks = vim.api.nvim_buf_get_extmarks(
+			vim.api.nvim_win_get_buf(windows.menu),
+			vim.api.nvim_create_namespace("sub-action"),
+			0,
+			-1,
+			{ details = true }
+		)
+		assert(vim.iter(marks):any(function(mark)
+			return mark[4].hl_group == "SubActionClient"
+		end))
 		equal(vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(windows.menu)), 4)
 		equal(vim.api.nvim_get_current_win(), origin)
 		assert(not vim.api.nvim_win_get_config(windows.menu).focusable)
@@ -365,6 +375,35 @@ local function run()
 		key("<Tab>")
 		equal(tab_count, 1)
 		vim.o.winborder, vim.go.winblend, vim.wo[origin].winblend = border, blend, local_blend
+	end)
+
+	check("titles replace shortcut columns, typed letters highlight in place, and single clients are hidden", function()
+		local previous, other = one.actions, two.actions
+		one.actions, two.actions = { command("Import Foo Red"), command("Import Foo Rose"), command("Import Bar") }, {}
+		open()
+		local buffer = vim.api.nvim_win_get_buf(floats().menu)
+		local namespace = vim.api.nvim_create_namespace("sub-action.input")
+		local function positions()
+			return vim.tbl_map(function(mark)
+				return { mark[2], mark[3] }
+			end, vim.api.nvim_buf_get_extmarks(buffer, namespace, 0, -1, {}))
+		end
+		assert(text(floats().menu):match("^ Import Foo Red") and not text(floats().menu):find("rust_analyzer", 1, true))
+		key("i")
+		equal(positions(), { { 0, 1 }, { 1, 1 }, { 2, 1 } })
+		key("f")
+		equal(positions(), { { 0, 1 }, { 0, 8 }, { 1, 1 }, { 1, 8 } })
+		key("<BS>")
+		equal(positions(), { { 0, 1 }, { 1, 1 }, { 2, 1 } })
+		key("<Tab>")
+		equal(positions(), {})
+		key("<Esc>")
+		setup({ client = { display = "name" } })
+		open()
+		assert(text(floats().menu):find("rust_analyzer", 1, true))
+		key("<Esc>")
+		one.actions, two.actions = previous, other
+		setup()
 	end)
 
 	check("window overrides win over globals, and inherited values update on the next open", function()
@@ -517,7 +556,7 @@ local function run()
 			end)
 			equal(one.commands[#one.commands].arguments, { "Beta" })
 			open()
-			assert(text(floats().menu):match("^%s+a%s+Alpha"))
+			assert(text(floats().menu):match("^%s+Alpha"))
 			key("q")
 			equal(floats(), {})
 			setup({ keymap = { ["<Esc>"] = "close" } })

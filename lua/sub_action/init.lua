@@ -24,7 +24,7 @@ local defaults = {
 		},
 	},
 	ranking = { frequency = false },
-	client = { display = "name", icons = {} },
+	client = { display = "auto", icons = {} },
 	preview = false,
 }
 local config
@@ -47,7 +47,7 @@ local function check_options(opts, template, path)
 		if name == "mode" then
 			assert(vim.tbl_contains({ "prefix", "mnemonic", "off" }, value), "invalid " .. field)
 		elseif name == "display" then
-			assert(vim.tbl_contains({ "name", "icon", "none" }, value), "invalid " .. field)
+			assert(vim.tbl_contains({ "auto", "name", "icon", "none" }, value), "invalid " .. field)
 		elseif name == "color" then
 			assert(value == false or value:match("^#%x%x%x%x%x%x$"), "color must be a #RRGGBB string or false")
 		elseif name == "max_width" or name == "max_height" or name == "winblend" then
