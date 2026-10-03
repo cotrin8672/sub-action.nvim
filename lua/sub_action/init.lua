@@ -13,16 +13,16 @@ local defaults = {
 		action = {
 			max_width = 50,
 			max_height = 8,
-			border = "none",
-			winblend = 0,
+			border = false,
+			winblend = false,
 			scrollbar = true,
 			winhighlight = "Normal:BlinkCmpMenu,FloatBorder:BlinkCmpMenuBorder,CursorLine:BlinkCmpMenuSelection,Search:None,CurSearch:None",
 		},
 		preview = {
 			max_width = 70,
 			max_height = 15,
-			border = "padded",
-			winblend = 0,
+			border = false,
+			winblend = false,
 			scrollbar = true,
 			winhighlight = "Normal:BlinkCmpDoc,FloatBorder:BlinkCmpDocBorder,EndOfBuffer:BlinkCmpDoc",
 		},
@@ -40,7 +40,10 @@ local function check_options(opts, template, path)
 		assert(default ~= nil, "unknown option: " .. field)
 		local kind = type(value)
 		assert(
-			kind == type(default) or (name == "border" and kind == "table") or (name == "color" and value == false),
+			kind == type(default)
+				or (name == "border" and (kind == "string" or kind == "table"))
+				or (name == "winblend" and kind == "number")
+				or (name == "color" and value == false),
 			field .. " has an invalid type"
 		)
 		if kind == "table" and name ~= "keymap" and name ~= "icons" and name ~= "border" then
@@ -117,15 +120,27 @@ function M.setup(opts)
 				dimension .. " must be a positive integer"
 			)
 		end
-		assert(window.winblend >= 0 and window.winblend <= 100 and window.winblend % 1 == 0, "invalid winblend")
+		assert(
+			window.winblend == false
+				or (
+					type(window.winblend) == "number"
+					and window.winblend >= 0
+					and window.winblend <= 100
+					and window.winblend % 1 == 0
+				),
+			"invalid winblend"
+		)
 		local border = window.border
 		if type(border) == "string" then
 			assert(
 				vim.tbl_contains({ "none", "single", "double", "rounded", "solid", "shadow", "padded" }, border),
 				"invalid border"
 			)
-		else
-			assert(vim.tbl_contains({ 1, 2, 4, 8 }, #border), "border must have 1, 2, 4, or 8 entries")
+		elseif border ~= false then
+			assert(
+				type(border) == "table" and vim.tbl_contains({ 1, 2, 4, 8 }, #border),
+				"border must have 1, 2, 4, or 8 entries"
+			)
 			for _, char in ipairs(border) do
 				if type(char) == "table" then
 					assert(#char == 2 and type(char[2]) == "string", "invalid border highlight")

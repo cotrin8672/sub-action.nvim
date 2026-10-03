@@ -13,13 +13,7 @@ Requires Neovim **0.11+** and an LSP with code actions. With
 ```lua
 {
   "cotrin8672/sub-action.nvim",
-  main = "sub_action",
-  dependencies = {
-    {
-      "sirasagi62/nvim-submode",
-      commit = "b427aef5da3a0ca3edab6ac0da9b66d454e2a52f",
-    },
-  },
+  dependencies = { "sirasagi62/nvim-submode" },
   opts = {},
   keys = {
     { "gra", function() require("sub_action").open() end, desc = "Code actions" },
@@ -67,8 +61,8 @@ require("sub_action").setup({
     ["<Esc>"] = "close",
   },
   ui = {
-    action = { max_width = 50, max_height = 8, border = "none", winblend = 0, scrollbar = true },
-    preview = { max_width = 70, max_height = 15, border = "padded", winblend = 0, scrollbar = true },
+    action = { max_width = 50, max_height = 8, scrollbar = true },
+    preview = { max_width = 70, max_height = 15, scrollbar = true },
   },
   ranking = { frequency = false }, -- enable explicitly to rank and save history
   client = { display = "name", icons = {} }, -- "name", "icon", "none"
@@ -83,8 +77,10 @@ only the shortcut: `open({ shortcut = { mode = "mnemonic" } })`.
 
 Window `winhighlight` uses `BlinkCmpMenu`, `BlinkCmpMenuBorder`, and
 `BlinkCmpMenuSelection` for actions; `BlinkCmpDoc` and `BlinkCmpDocBorder` for
-previews. These theme groups fall back to native highlights. Borders are fixed
-defaults; global `winborder` is not inherited. Missing client icons are omitted.
+previews. These theme groups fall back to native highlights. Omitted or `false`
+`border` and `winblend` inherit Neovim's global `winborder` and `winblend` when
+opened; explicit values override them. An empty `winborder` uses Blink's defaults:
+`none` for actions, `padded` for previews. Missing client icons are omitted.
 The accent is exposed through
 `require("nvim-submode").get_submode_color()` for statuslines and cursor colors.
 

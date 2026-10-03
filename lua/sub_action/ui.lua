@@ -27,9 +27,18 @@ highlights()
 api.nvim_create_autocmd("ColorScheme", { callback = highlights })
 
 local function style(kind, options)
+	local border = options.border
+	if border == false then
+		if vim.o.winborder ~= "" then
+			border = vim.opt.winborder:get()
+			border = #border == 1 and border[1] or border
+		else
+			border = kind == "action" and "none" or "padded"
+		end
+	end
 	return {
-		border = options.border,
-		winblend = options.winblend,
+		border = border,
+		winblend = options.winblend == false and vim.go.winblend or options.winblend,
 		winhighlight = options.winhighlight,
 		min_width = kind == "action" and 15 or 1,
 		max_height = options.max_height,
@@ -185,6 +194,7 @@ local function scrollbar(float)
 		vim.bo[bar.buf].bufhidden = "wipe"
 		position.style, position.noautocmd = "minimal", true
 		bar.id = api.nvim_open_win(bar.buf, false, position)
+		vim.wo[bar.id].winblend = options.winblend
 		position.style, position.noautocmd = nil, nil
 	end
 	if bar.height ~= height then
@@ -223,7 +233,7 @@ local function mark(buffer, row, start, finish, group, priority)
 end
 
 function M.menu(s, config)
-	local options = style("action", config.ui.action)
+	local options = s.menu_options or style("action", config.ui.action)
 	local padding = type(options.padding) == "table" and options.padding or { options.padding, options.padding }
 	s.menu_options, s.label_start, s.marked_input = options, padding[1], nil
 	local names, titles, label_width, name_width, title_width = {}, {}, 0, 0, 0

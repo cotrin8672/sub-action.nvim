@@ -80,6 +80,8 @@ local function run()
 		fresh.open()
 		equal(captured.ranking.frequency, false)
 		equal(captured.color, "#E3A875")
+		equal(captured.ui.action.border, false)
+		equal(captured.ui.preview.winblend, false)
 		equal(captured.keymap["<Esc>"], "close")
 		equal(captured.keymap["<C-c>"], nil)
 		fresh.open({ shortcut = { mode = "off" } })
@@ -110,6 +112,9 @@ local function run()
 			{ ui = { action = { max_height = 0 } } },
 			{ ui = { preview = { scrollbar = 0 } } },
 			{ ui = { action = { winblend = 101 } } },
+			{ ui = { action = { winblend = true } } },
+			{ ui = { preview = { winblend = "10" } } },
+			{ ui = { action = { border = true } } },
 			{ ui = { preview = { border = {} } } },
 			{ ui = { action = { border = { "wide" } } } },
 			{ client = { icons = { rust_analyzer = false } } },
@@ -306,7 +311,7 @@ local function run()
 	local function command(title)
 		return { title = title, command = "test.command", arguments = { title } }
 	end
-	setup({ ui = { action = { winblend = 10 }, preview = { winblend = 10 } } })
+	setup()
 	one.actions = {
 		{ title = "Import Foo", edit = edit, kind = "quickfix" },
 		command("Import Bar"),
@@ -316,8 +321,9 @@ local function run()
 
 	check("multiple clients, non-focusable Blink-shaped floats, Tab and Escape", function()
 		local origin = vim.api.nvim_get_current_win()
-		local border = vim.o.winborder
-		vim.o.winborder = "rounded"
+		local border, blend, local_blend = vim.o.winborder, vim.go.winblend, vim.wo[origin].winblend
+		vim.o.winborder, vim.go.winblend = "rounded", 17
+		vim.api.nvim_set_option_value("winblend", 3, { scope = "local", win = origin })
 		open()
 		local windows = floats()
 		equal(require("nvim-submode").get_submode_color(), "#E3A875")
@@ -326,9 +332,9 @@ local function run()
 		equal(vim.api.nvim_get_current_win(), origin)
 		assert(not vim.api.nvim_win_get_config(windows.menu).focusable)
 		assert(not vim.api.nvim_win_get_config(windows.preview).focusable)
-		local menu_border = vim.api.nvim_win_get_config(windows.menu).border
-		assert(menu_border == nil or menu_border == "none")
-		equal(vim.api.nvim_win_get_config(windows.preview).border, { " ", "", "", " ", "", "", " ", " " })
+		local rounded = { "╭", "─", "╮", "│", "╯", "─", "╰", "│" }
+		equal(vim.api.nvim_win_get_config(windows.menu).border, rounded)
+		equal(vim.api.nvim_win_get_config(windows.preview).border, rounded)
 		vim.api.nvim_exec_autocmds("CursorMoved", {})
 		vim.api.nvim_exec_autocmds("TextChanged", { buffer = source })
 		vim.wait(20, function()
@@ -342,8 +348,8 @@ local function run()
 		equal(vim.api.nvim_get_hl(0, { name = "SubActionSelection", link = false }).bg, 0x123456)
 		vim.api.nvim_set_hl(0, selection, original_selection)
 		vim.api.nvim_exec_autocmds("ColorScheme", {})
-		equal(vim.wo[windows.menu].winblend, 10)
-		equal(vim.wo[windows.preview].winblend, 10)
+		equal(vim.wo[windows.menu].winblend, 17)
+		equal(vim.wo[windows.preview].winblend, 17)
 		assert(not package.loaded["blink.cmp.lib.window"] and not package.loaded["blink.lib"])
 		key("<Tab>")
 		equal(vim.api.nvim_win_get_cursor(windows.menu)[1], 2)
@@ -357,7 +363,46 @@ local function run()
 		equal(vim.fn.maparg("<Tab>", "n", false, true).callback, tab_mapping.callback)
 		key("<Tab>")
 		equal(tab_count, 1)
-		vim.o.winborder = border
+		vim.o.winborder, vim.go.winblend, vim.wo[origin].winblend = border, blend, local_blend
+	end)
+
+	check("window overrides win over globals, and inherited values update on the next open", function()
+		local border, blend = vim.o.winborder, vim.go.winblend
+		vim.o.winborder, vim.go.winblend = "rounded", 35
+		setup({
+			ui = {
+				action = { border = "none", winblend = 0 },
+				preview = { border = { "#" }, winblend = 7 },
+			},
+		})
+		open()
+		local windows = floats()
+		local menu_border = vim.api.nvim_win_get_config(windows.menu).border
+		assert(menu_border == nil or menu_border == "none")
+		equal(vim.api.nvim_win_get_config(windows.preview).border, vim.fn["repeat"]({ "#" }, 8))
+		equal(vim.wo[windows.menu].winblend, 0)
+		equal(vim.wo[windows.preview].winblend, 7)
+		equal(vim.go.winblend, 35)
+		plugin.close()
+		setup({
+			ui = {
+				action = { border = false, winblend = false },
+				preview = { border = false, winblend = false },
+			},
+		})
+		local inherited_border = { "╔", "═", "╗", "║", "╝", "═", "╚", "║" }
+		vim.o.winborder, vim.go.winblend = "double", 45
+		if vim.fn.has("nvim-0.12") == 1 then
+			vim.o.winborder = "+,-,+,|,+,-,+,|"
+			inherited_border = { "+", "-", "+", "|", "+", "-", "+", "|" }
+		end
+		open()
+		for _, window in pairs(floats()) do
+			equal(vim.api.nvim_win_get_config(window).border, inherited_border)
+			equal(vim.wo[window].winblend, 45)
+		end
+		plugin.close()
+		vim.o.winborder, vim.go.winblend = border, blend
 	end)
 
 	check("native scrollbars follow selection, reuse windows, and close with their parent", function()
@@ -370,6 +415,9 @@ local function run()
 		setup({ ui = { action = { max_height = 3 }, preview = { max_height = 2 } } })
 		open()
 		local windows = floats()
+		local menu_border = vim.api.nvim_win_get_config(windows.menu).border
+		assert(menu_border == nil or menu_border == "none")
+		equal(vim.api.nvim_win_get_config(windows.preview).border, { " ", "", "", " ", "", "", " ", " " })
 		local function bar(parent)
 			for _, window in ipairs(vim.api.nvim_list_wins()) do
 				local c = vim.api.nvim_win_get_config(window)
