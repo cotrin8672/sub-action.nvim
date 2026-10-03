@@ -25,6 +25,7 @@ local defaults = {
 	},
 	ranking = { frequency = false },
 	client = { display = "name", icons = {} },
+	preview = false,
 }
 local config
 
@@ -38,7 +39,9 @@ local function check_options(opts, template, path)
 		local field = path .. "." .. tostring(name)
 		assert(default ~= nil, "unknown option: " .. field)
 		local kind = type(value)
-		if name ~= "color" or value ~= false then
+		if name == "preview" and default == false then
+			assert(value == false or kind == "function", field .. " must be a function or false")
+		elseif name ~= "color" or value ~= false then
 			vim.validate(field, value, name == "border" and { "string", "table" } or type(default))
 		end
 		if name == "mode" then

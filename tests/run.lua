@@ -106,6 +106,8 @@ local function run()
 			{ shortcut = { mode = "typo" } },
 			{ shortcut = { typo = true } },
 			{ ranking = { frequency = "yes" } },
+			{ preview = true },
+			{ preview = {} },
 			{ ui = { action = { padding = 2 } } },
 			{ ui = { action = { max_height = 0 } } },
 			{ ui = { preview = { scrollbar = 0 } } },
@@ -180,6 +182,7 @@ local function run()
 		equal(vim.api.nvim_list_bufs(), before)
 		equal(bridge.preview(nil, "utf-16"), { "Preview unavailable" })
 		local annotated = {
+			changes = {},
 			documentChanges = {
 				{
 					textDocument = { uri = uri, version = 1 },
@@ -640,6 +643,61 @@ local function run()
 		tabs = tab_count
 		key("u<Tab>")
 		equal(tab_count, tabs + 1)
+	end)
+
+	check("preview callbacks receive resolved actions, cache results, fall back, and isolate errors", function()
+		local previous, commands, resolves = one.actions, #one.commands, #one.resolvers
+		local calls, native_calls = 0, 0
+		local native = bridge.preview
+		bridge.preview = function(...)
+			native_calls = native_calls + 1
+			return native(...)
+		end
+		one.actions = { { title = "External", data = "defer" }, { title = "Native", edit = edit }, command("Error") }
+		setup({
+			preview = function(action, context)
+				calls = calls + 1
+				equal(context.bufnr, source)
+				equal(context.client.id, one.id)
+				if action.title == "External" then
+					equal(action.data, "resolved payload")
+					return { "+ external preview" }
+				elseif action.title == "Error" then
+					error("expected preview failure")
+				end
+			end,
+		})
+		open()
+		wait(function()
+			return #one.resolvers == resolves + 1
+		end)
+		equal(calls, 0)
+		one.resolvers[resolves + 1](nil, {
+			title = "External",
+			data = "resolved payload",
+			command = { command = "test.command", arguments = { "original" } },
+		})
+		wait(function()
+			return text(floats().preview) == "+ external preview"
+		end)
+		equal(#one.commands, commands)
+		equal(vim.api.nvim_buf_get_lines(source, 0, -1, false), original)
+		key("<Tab>")
+		assert(text(floats().preview):find("+use crate::Foo;", 1, true))
+		equal(native_calls, 1)
+		key("<Tab>")
+		assert(text(floats().preview):find("expected preview failure", 1, true))
+		key("<Tab>")
+		equal(text(floats().preview), "+ external preview")
+		equal(calls, 3)
+		key("<CR>")
+		wait(function()
+			return #one.commands == commands + 1
+		end)
+		equal(one.commands[#one.commands].arguments, { "original" })
+		equal(#one.resolvers, resolves + 1)
+		bridge.preview, one.actions = native, previous
+		setup()
 	end)
 
 	check("frequency persists per filetype and ties keep server order", function()

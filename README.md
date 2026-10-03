@@ -74,6 +74,13 @@ Set a binding to `false` to disable it, e.g.
 only the shortcut: `open({ shortcut = { mode = "mnemonic" } })`.
 `close()` cancels. Unknown options and invalid values are errors.
 
+For nonstandard actions, set `preview = function(action, context) ... end` in
+`setup()` or `opts`. Return a list of display lines, or `nil` to use the native
+WorkspaceEdit preview. The callback receives the action after resolve (when
+supported), plus `context.client` and `context.bufnr`. Results are cached per
+action. Preview callbacks must not edit buffers or mutate the action; applying
+still executes the original edit and command. The default is `preview = false`.
+
 Window `winhighlight` uses `BlinkCmpMenu`, `BlinkCmpMenuBorder`, and
 `BlinkCmpMenuSelection` for actions; `BlinkCmpDoc` and `BlinkCmpDocBorder` for
 previews. These theme groups fall back to native highlights. Omitted

@@ -5,7 +5,7 @@ local lsp = require("sub_action.lsp")
 local ui = require("sub_action.ui")
 local shortcut = require("sub_action.shortcut")
 local current, runtime, pending
-local loading, unavailable = { "Loading…" }, { "Preview unavailable" }
+local loading = { "Loading…" }
 local apply_keys = api.nvim_replace_termcodes("<Cmd>lua require('sub_action.session').apply()<CR>", true, false, true)
 
 local function notify(message)
@@ -59,16 +59,31 @@ local function preview(s)
 		return
 	end
 	local finished = false
-	local function draw(action, err)
+	local function draw(action, err, resolved)
+		local data = resolved and s.config.preview and action or action.edit
 		entry.preview_action = action
 		if err then
 			entry.preview = { "Preview unavailable", err.message or tostring(err) }
-		elseif not action.edit then
-			entry.preview = unavailable
-		elseif not entry.preview or not vim.deep_equal(entry.preview_edit, action.edit) then
-			local ok, lines = pcall(lsp.preview, action.edit, entry.client.offset_encoding)
+		elseif not entry.preview or not vim.deep_equal(entry.preview_data, data) then
+			local ok, lines = pcall(function()
+				local custom = resolved
+						and s.config.preview
+						and s.config.preview(action, { client = entry.client, bufnr = s.bufnr })
+					or nil
+				assert(custom == nil or vim.islist(custom), "preview must return a list of lines or nil")
+				for _, line in ipairs(custom or {}) do
+					assert(type(line) == "string", "preview lines must be strings")
+				end
+				if custom then
+					return custom
+				end
+				if entry.preview and vim.deep_equal(entry.preview_data, action.edit) then
+					return entry.preview
+				end
+				return lsp.preview(action.edit, entry.client.offset_encoding)
+			end)
 			entry.preview = ok and lines or { "Preview unavailable", tostring(lines) }
-			entry.preview_edit = action.edit
+			entry.preview_data = data
 		end
 		ui.preview(s, entry.preview, s.config)
 	end
@@ -81,7 +96,7 @@ local function preview(s)
 		if not valid(s) or s.applying or s.actions[s.selected] ~= entry then
 			return
 		end
-		draw(action, err)
+		draw(action, err, true)
 	end)
 	if not finished and not entry.preview then
 		ui.preview(s, loading, s.config)
